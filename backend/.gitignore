@@ -1,0 +1,31 @@
+# Arquivo de segredos
+.env
+
+# Banco de dados de desenvolvimento
+db.sqlite3
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Arquivos de cache do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Arquivos de IDEs e editores
+.vscode/
+.idea/
+
+# Arquivos de sistema operacional
+.DS_Store
+Thumbs.db
+
+# Arquivos de log e mídia (gerados localmente)
+*.log
+/media/
+
+# Pasta de arquivos estáticos coletados
+/staticfiles/

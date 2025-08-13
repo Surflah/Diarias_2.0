@@ -1,0 +1,49 @@
+# Arquivos de Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Ambientes virtuais e dependências locais
+/backend/.venv/
+/backend/venv/
+/frontend/node_modules/
+
+# Arquivos de segredos
+.env
+/backend/.env
+/frontend/.env
+
+# Banco de dados de desenvolvimento
+/backend/db.sqlite3
+
+# Cache e build do Python/Django
+/backend/__pycache__/
+/backend/*.pyc
+/backend/*.pyo
+/backend/*.pyd
+/backend/staticfiles/
+/backend/media/
+
+# Cache e build do Node/React
+/frontend/.pnp.js
+/frontend/build/
+/frontend/.npm
+
+# Arquivos de IDEs e Editores
+.vscode/
+.idea/
+*.swp
+
+# Arquivos de teste e cobertura
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Lixo do Sistema (Trash) - Importante para o seu caso
+.Trash-*/
+.local/share/Trash/
