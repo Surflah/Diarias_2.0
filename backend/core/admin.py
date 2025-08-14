@@ -1,6 +1,11 @@
 # backend/core/admin.py
 from django.contrib import admin
-from .models import Processo, ParametrosSistema, Feriado, ProcessoHistorico, Documento, Profile
+from .models import Processo, ParametrosSistema, Feriado, ProcessoHistorico, Documento, Profile, Role
+
+@admin.register(Role)
+class RoleAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug')
+    prepopulated_fields = {'slug': ('name',)} 
 
 
 @admin.register(Profile)
@@ -10,7 +15,8 @@ class ProfileAdmin(admin.ModelAdmin):
     """
     list_display = ('user', 'cpf', 'cargo')
     search_fields = ('user__username', 'user__email', 'cpf')
-    list_filter = ('cargo',)
+    list_filter = ('cargo', 'roles')
+    filter_horizontal = ('roles',)
 
 # Inline para mostrar o histórico dentro da página do Processo
 class ProcessoHistoricoInline(admin.TabularInline):

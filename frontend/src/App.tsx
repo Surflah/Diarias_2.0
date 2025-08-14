@@ -4,6 +4,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Login } from './pages/Login';
 import { useAuth } from './context/AuthContext';
 import { CompleteProfile } from './pages/CompleteProfile';
+import { SelectRole } from './pages/SelectRole'; 
 
 // Aceita qualquer nó React e evita depender do namespace JSX
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
@@ -32,6 +33,10 @@ function App(): React.ReactElement {
             <CompleteProfile />
           </PrivateRoute>
         }
+      />
+      <Route
+        path="/select-role"
+        element={<PrivateRoute><SelectRole /></PrivateRoute>}
       />
       <Route
         path="/dashboard"
