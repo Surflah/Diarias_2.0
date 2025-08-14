@@ -1,7 +1,10 @@
 # backend/api/serializers.py
 from rest_framework import serializers
 from core.models import Processo, ParametrosSistema, Feriado
+from core.models import Profile
 from common.models import User
+from rest_framework import serializers
+
 
 # Serializer para leitura de dados do usuário (não expõe dados sensíveis)
 class UserSerializer(serializers.ModelSerializer):
@@ -44,3 +47,34 @@ class FeriadoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Feriado
         fields = '__all__'
+
+class ProfileSerializer(serializers.ModelSerializer):
+    """
+    Serializer para o modelo Profile.
+    Inclui campos do usuário para facilitar a exibição no frontend.
+    """
+    # Usamos source para buscar dados do modelo User relacionado
+    first_name = serializers.CharField(source='user.first_name', required=False)
+    last_name = serializers.CharField(source='user.last_name', required=False)
+    email = serializers.EmailField(source='user.email', read_only=True)
+
+    class Meta:
+        model = Profile
+        fields = ('first_name', 'last_name', 'email', 'cpf', 'cargo')
+
+    def update(self, instance, validated_data):
+        # Lógica para atualizar também os dados do usuário (nome, sobrenome)
+        user_data = validated_data.pop('user', {})
+        user = instance.user
+
+        # Atualiza os campos do Profile
+        instance.cpf = validated_data.get('cpf', instance.cpf)
+        instance.cargo = validated_data.get('cargo', instance.cargo)
+        instance.save()
+
+        # Atualiza os campos do User
+        user.first_name = user_data.get('first_name', user.first_name)
+        user.last_name = user_data.get('last_name', user.last_name)
+        user.save()
+
+        return instance

@@ -1,6 +1,25 @@
 # backend/core/models.py
 from django.db import models
-from django.conf import settings # Importa as configurações para referenciar o User
+from django.conf import settings 
+
+from django.contrib.auth.models import User
+from django.db.models.signals import post_save
+
+class Profile(models.Model):
+    """
+    Modelo de Perfil para estender o modelo de usuário padrão do Django
+    com informações adicionais específicas da nossa aplicação.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    cpf = models.CharField(max_length=14, unique=True, null=True, blank=True, help_text="Formato: 123.456.789-00")
+    cargo = models.CharField(max_length=100, null=True, blank=True)
+    # Futuramente, podemos adicionar outros campos aqui, como telefone, matrícula, etc.
+
+    def __str__(self):
+        return f'Perfil de {self.user.username}'
+
+
+
 
 class ParametrosSistema(models.Model):
     """

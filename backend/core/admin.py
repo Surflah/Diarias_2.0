@@ -1,6 +1,16 @@
 # backend/core/admin.py
 from django.contrib import admin
-from .models import Processo, ParametrosSistema, Feriado, ProcessoHistorico, Documento
+from .models import Processo, ParametrosSistema, Feriado, ProcessoHistorico, Documento, Profile
+
+
+@admin.register(Profile)
+class ProfileAdmin(admin.ModelAdmin):
+    """
+    Configuração para exibir o modelo Profile no painel de administração do Django.
+    """
+    list_display = ('user', 'cpf', 'cargo')
+    search_fields = ('user__username', 'user__email', 'cpf')
+    list_filter = ('cargo',)
 
 # Inline para mostrar o histórico dentro da página do Processo
 class ProcessoHistoricoInline(admin.TabularInline):

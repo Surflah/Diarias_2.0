@@ -1,23 +1,80 @@
 # backend/api/views.py
-from rest_framework import viewsets, permissions
+
+import requests
+from django.contrib.auth import get_user_model
+from django.conf import settings
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework import status, viewsets, permissions, generics
+from rest_framework_simplejwt.tokens import RefreshToken
+
 from core.models import Processo, ParametrosSistema, Feriado
-from core.services import calculos_service # Importamos nossa lógica de negócio
-from .serializers import ProcessoSerializer, ParametrosSistemaSerializer, FeriadoSerializer
+from core.services import calculos_service
+from .serializers import ProcessoSerializer, ParametrosSistemaSerializer, FeriadoSerializer, ProfileSerializer
 
-from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
-from allauth.socialaccount.providers.oauth2.client import OAuth2Client
-from dj_rest_auth.registration.views import SocialLoginView
+User = get_user_model()
 
-class GoogleLogin(SocialLoginView):
-    """
-    View para o login social com Google. Esta é a classe que estava faltando.
-    """
-    adapter_class = GoogleOAuth2Adapter
-    # ATENÇÃO: A URL de callback deve ser EXATAMENTE a mesma que você configurou
-    # nas credenciais do Google Cloud para o seu frontend.
-    callback_url = "http://localhost:3000" 
-    client_class = OAuth2Client
+class GoogleAuthView(APIView):
+    permission_classes = [permissions.AllowAny]
 
+    def post(self, request):
+
+        code = request.data.get("code")
+        if not code:
+            return Response({"error": "Missing code"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # pega credenciais a partir do settings (definidas pelo settings.py acima)
+        client_id = getattr(settings, "GOOGLE_CLIENT_ID", None) or getattr(settings, "GOOGLE_CLOUD_CLIENT_ID", None)
+        client_secret = getattr(settings, "GOOGLE_CLIENT_SECRET", None) or getattr(settings, "GOOGLE_CLOUD_CLIENT_SECRET", None)
+
+        if not client_id or not client_secret:
+            return Response(
+                {
+                    "error": "Google client credentials not configured on server.",
+                    "detail": "Coloque credentials.json na raiz do backend ou defina GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET."
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        token_res = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": "postmessage",  
+                "grant_type": "authorization_code"
+            }
+        )
+
+        token_data = token_res.json()
+        if "error" in token_data:
+            return Response({"error": token_data}, status=status.HTTP_400_BAD_REQUEST)
+
+        id_token = token_data.get("id_token")
+        if not id_token:
+            return Response({"error": "No id_token from Google"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Valida o token com Google
+        info_res = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}")
+        user_info = info_res.json()
+
+        email = user_info.get("email")
+        if not email:
+            return Response({"error": "Invalid token info"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 3. Cria ou pega usuário
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={"username": email, "first_name": user_info.get("given_name", "")}
+        )
+
+        # 4. Gera JWT
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+        })
 
 class ProcessoViewSet(viewsets.ModelViewSet):
     """
@@ -76,3 +133,17 @@ class FeriadoViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Feriado.objects.all()
     serializer_class = FeriadoSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+class UserProfileView(generics.RetrieveUpdateAPIView):
+    """
+    View para ler e atualizar o perfil do usuário logado.
+    Garante que um usuário só possa ver e editar o seu próprio perfil.
+    """
+    serializer_class = ProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        # Esta função é a chave da segurança:
+        # ela retorna sempre o perfil do usuário que está fazendo a requisição.
+        # Impede que um usuário acesse /api/profile/me/ e veja dados de outro.
+        return self.request.user.profile
