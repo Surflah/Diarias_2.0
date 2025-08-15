@@ -134,10 +134,15 @@ export const NovaDiaria = () => {
       const response = await apiClient.post<CalculoData>('/processos/calcular-preview/', payload);
       setCalculoData(response.data);
     } catch (error: any) {
-      setCalculoError(error.response?.data?.error || 'Erro ao calcular valores.');
-      setCalculoData(initialCalculoData);
+      console.error('calcular-preview status:', error?.response?.status);
+      console.error('calcular-preview response.data:', error?.response?.data);
+      setCalculoError(
+          error?.response?.data?.error ||
+          (error?.response?.data ? JSON.stringify(error.response.data) : 'Erro ao calcular valores.')
+     );
+     setCalculoData(initialCalculoData);
     } finally {
-      setIsCalculating(false);
+     setIsCalculating(false);
     }
   }, [formData.destino, formData.data_saida, formData.data_retorno]);
 

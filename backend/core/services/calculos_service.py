@@ -72,61 +72,68 @@ def calcular_valor_diarias(destino: str, data_saida: datetime, data_retorno: dat
     
     return detalhes
 
-# <-- FUNÇÃO ALTERADA PARA RETORNAR MAIS DETALHES -->
 def calcular_valor_deslocamento(destino: str) -> dict:
     """
     Calcula o valor do deslocamento e retorna uma análise detalhada.
+    Retorna números em tipos primitivos (floats) para facilitar serialização JSON.
     """
     try:
         parametros = ParametrosSistema.objects.first()
         if not parametros or not parametros.preco_medio_gasolina:
-            raise CalculoServiceError("Preço da gasolina não cadastrado.")
+            raise CalculoServiceError("Preço da gasolina não cadastrado nos parâmetros do sistema.")
         
         preco_gasolina = parametros.preco_medio_gasolina
-        # Prepara o retorno padrão
         resultado = {
-            "valor_deslocamento": Decimal('0.00'),
-            "distancia_km": Decimal('0.0'),
-            "preco_gas_usado": preco_gasolina
+            "valor_deslocamento": 0.0,
+            "distancia_km": 0.0,
+            "preco_gas_usado": float(preco_gasolina)
         }
         
-        api_key = settings.GOOGLE_MAPS_API_KEY
+        api_key = getattr(settings, 'GOOGLE_MAPS_API_KEY', None)
         if not api_key:
             raise CalculoServiceError("GOOGLE_MAPS_API_KEY não configurada.")
 
         origem = "Câmara Municipal de Itapoá, SC"
-        url = f"https://maps.googleapis.com/maps/api/directions/json?origin={origem}&destination={destino}&key={api_key}"
-        
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data['status'] == 'OK':
-            distancia_metros = data['routes'][0]['legs'][0]['distance']['value']
-            distancia_km = Decimal(distancia_metros / 1000)
-            distancia_total_km = distancia_km * 2
-            
-            valor = (distancia_total_km / Decimal(10)) * preco_gasolina
-            
-            resultado["valor_deslocamento"] = round(valor, 2)
-            resultado["distancia_km"] = round(distancia_total_km, 1)
-            return resultado
+        url = "https://maps.googleapis.com/maps/api/directions/json"
+        params = {
+            'origin': origem,
+            'destination': destino,
+            'key': api_key,
+            'mode': 'driving',
+            'units': 'metric'
+        }
+
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if data.get('status') == 'OK' and data.get('routes'):
+            try:
+                distancia_metros = data['routes'][0]['legs'][0]['distance']['value']
+                distancia_km = Decimal(distancia_metros) / Decimal(1000)
+                distancia_total_km = distancia_km * 2  # ida e volta
+
+                valor = (distancia_total_km / Decimal(10)) * Decimal(preco_gasolina)
+
+                resultado["valor_deslocamento"] = float(round(valor, 2))
+                resultado["distancia_km"] = float(round(distancia_total_km, 1))
+                resultado["preco_gas_usado"] = float(preco_gasolina)
+                return resultado
+            except (KeyError, IndexError, TypeError) as e:
+                raise CalculoServiceError("Resposta inesperada da API de Rotas. O destino é válido? " + str(e))
         else:
-            error_message = data.get('error_message', data['status'])
+            error_message = data.get('error_message') or data.get('status') or 'Unknown error from Google Directions API'
             raise CalculoServiceError(f"Erro na API de Rotas: {error_message}")
 
     except requests.exceptions.RequestException as e:
         raise CalculoServiceError(f"Erro de comunicação com a API de Rotas: {e}")
-    except (KeyError, IndexError):
-        raise CalculoServiceError("Resposta inesperada da API de Rotas. O destino é válido?")
-    except CalculoServiceError as e:
-        # Se um erro já conhecido acontecer, apenas o repassa
-        raise e
-    except Exception:
-        # Para qualquer outro erro inesperado, retorna o padrão
+    except CalculoServiceError:
+        raise
+    except Exception as e:
+        # Em caso de erro inesperado, devolve padrão e mensagem
         return {
-            "valor_deslocamento": Decimal('0.00'),
-            "distancia_km": Decimal('0.0'),
-            "preco_gas_usado": parametros.preco_medio_gasolina if 'parametros' in locals() else Decimal('0.0'),
-            "error": "Ocorreu um erro inesperado no cálculo de deslocamento."
+            "valor_deslocamento": 0.0,
+            "distancia_km": 0.0,
+            "preco_gas_usado": float(parametros.preco_medio_gasolina) if 'parametros' in locals() and parametros and parametros.preco_medio_gasolina else 0.0,
+            "error": f"Ocorreu um erro inesperado no cálculo de deslocamento: {str(e)}"
         }
