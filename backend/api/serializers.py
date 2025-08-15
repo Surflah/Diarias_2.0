@@ -73,3 +73,20 @@ class ProfileSerializer(serializers.ModelSerializer):
         user.save()
 
         return instance
+    
+class CalculoPreviewSerializer(serializers.Serializer):
+    """
+    Valida os dados necessários para o cálculo de preview de uma diária.
+    Não está ligado a nenhum modelo, apenas define os campos esperados.
+    """
+    destino = serializers.CharField(max_length=255)
+    data_saida = serializers.DateTimeField()
+    data_retorno = serializers.DateTimeField()
+
+    def validate(self, data):
+        """
+        Validação customizada para garantir que a data de retorno é posterior à de saída.
+        """
+        if data['data_saida'] >= data['data_retorno']:
+            raise serializers.ValidationError("A data de retorno deve ser posterior à data de saída.")
+        return data

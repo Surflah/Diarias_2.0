@@ -10,7 +10,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Processo, ParametrosSistema, Feriado
 from core.services import calculos_service
-from .serializers import ProcessoSerializer, ParametrosSistemaSerializer, FeriadoSerializer, ProfileSerializer
+from .serializers import ProcessoSerializer, ParametrosSistemaSerializer, FeriadoSerializer, ProfileSerializer, CalculoPreviewSerializer
+
+from core.services.calculos_service import calcular_valor_diarias, calcular_valor_deslocamento, CalculoServiceError
 
 User = get_user_model()
 
@@ -147,3 +149,43 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
         # ela retorna sempre o perfil do usuário que está fazendo a requisição.
         # Impede que um usuário acesse /api/profile/me/ e veja dados de outro.
         return self.request.user.profile
+    
+class CalculoPreviewAPIView(APIView):
+    """
+    Endpoint para calcular os valores de uma diária em tempo real (preview),
+    sem salvar um processo no banco de dados.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = CalculoPreviewSerializer(data=request.data)
+        if serializer.is_valid():
+            data = serializer.validated_data
+            try:
+                # 1. Chama nossos serviços de cálculo
+                valor_diarias = calcular_valor_diarias(
+                    destino=data['destino'],
+                    data_saida=data['data_saida'],
+                    data_retorno=data['data_retorno']
+                )
+                
+                deslocamento_info = calcular_valor_deslocamento(
+                    destino=data['destino']
+                )
+
+                # 2. Monta a resposta para o frontend
+                response_data = {
+                    'valor_total_diarias': valor_diarias,
+                    'valor_deslocamento': deslocamento_info.get('valor_deslocamento', 0),
+                    'distancia_km': deslocamento_info.get('distancia_km', 0),
+                    'valor_total_empenhar': valor_diarias + deslocamento_info.get('valor_deslocamento', 0)
+                }
+                return Response(response_data, status=status.HTTP_200_OK)
+
+            except CalculoServiceError as e:
+                # Se nossos serviços retornarem um erro (ex: UPM não cadastrada),
+                # enviamos uma resposta de erro clara para o frontend.
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Se os dados de entrada forem inválidos (ex: data de retorno antes da saída)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

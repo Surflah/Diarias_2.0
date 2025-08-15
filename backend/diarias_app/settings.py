@@ -13,11 +13,11 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 from decouple import config
 from dotenv import load_dotenv
+from decouple import config
 import os
+import json
 
 load_dotenv()
-
-import json
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
@@ -268,3 +268,6 @@ REST_FRAMEWORK = {
 # Caso queira timezone do Brasil
 TIME_ZONE = 'America/Sao_Paulo'
 USE_TZ = True
+
+
+GOOGLE_MAPS_API_KEY = config('GOOGLE_MAPS_API_KEY', default=None)

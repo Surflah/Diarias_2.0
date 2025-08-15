@@ -5,6 +5,8 @@ import { Login } from './pages/Login';
 import { useAuth } from './context/AuthContext';
 import { CompleteProfile } from './pages/CompleteProfile';
 import { SelectRole } from './pages/SelectRole'; 
+import { AppLayout } from './components/Layout';
+import { NovaDiaria } from './pages/NovaDiaria';
 
 // Aceita qualquer nó React e evita depender do namespace JSX
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
@@ -26,31 +28,32 @@ function App(): React.ReactElement {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route
-        path="/complete-profile"
-        element={
-          <PrivateRoute>
-            <CompleteProfile />
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/select-role"
-        element={<PrivateRoute><SelectRole /></PrivateRoute>}
-      />
-      <Route
-        path="/dashboard"
-        element={
-          <PrivateRoute>
-            <div>
-              <h1>Dashboard - Bem-vindo!</h1>
-              <p>Login realizado com sucesso.</p>
-            </div>
-          </PrivateRoute>
-        }
-      />
 
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      {/* 2. Envolvemos todas as rotas privadas em uma rota "mãe" com o AppLayout */}
+      <Route
+        path="/*"
+        element={
+          <PrivateRoute>
+            <AppLayout>
+              <Routes>
+                <Route path="/complete-profile" element={<CompleteProfile />} />
+                <Route path="/select-role" element={<SelectRole />} />
+                <Route
+                  path="/dashboard"
+                  element={
+                    <div>
+                      <h1>Dashboard</h1>
+                      <p>Você está logado com o perfil: <strong>{useAuth().activeRole}</strong></p>
+                    </div>
+                  }
+                />
+                <Route path="/diarias/nova" element={<NovaDiaria />} />
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </Routes>
+            </AppLayout>
+          </PrivateRoute>
+        }
+      />
     </Routes>
   );
 }
