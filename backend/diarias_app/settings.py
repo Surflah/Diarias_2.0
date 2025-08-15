@@ -12,10 +12,12 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 from decouple import config
+from dotenv import load_dotenv
+from decouple import config
+import os
+import json
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
-
+load_dotenv()
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
@@ -27,6 +29,60 @@ SECRET_KEY = 'django-insecure-k03^fvp6*=4nl%6z!^jsznj-x8e=@z&am4q!1kg5u!)j*q75i7
 DEBUG = True
 
 ALLOWED_HOSTS = []
+
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+GOOGLE_CLIENT_ID = None
+GOOGLE_CLIENT_SECRET = None
+
+# tenta carregar credentials.json do root do projeto (mesmo local de manage.py)
+CREDENTIALS_PATH = os.path.join(BASE_DIR, "credentials.json")
+if os.path.exists(CREDENTIALS_PATH):
+    try:
+        with open(CREDENTIALS_PATH, "r", encoding="utf-8") as f:
+            creds = json.load(f)
+        # O JSON do Google pode ter a chave "web" (apps for web) ou "installed"
+        google_cfg = creds.get("web") or creds.get("installed") or creds
+
+        GOOGLE_CLIENT_ID = google_cfg.get("client_id")
+        GOOGLE_CLIENT_SECRET = google_cfg.get("client_secret")
+
+        if DEBUG:
+            print(f"✅ carregado credentials.json: GOOGLE_CLIENT_ID={'***' if GOOGLE_CLIENT_ID else None}")
+    except Exception as e:
+        # Em DEV, apenas log para debug; não pare a aplicação
+        if DEBUG:
+            print(f"⚠️ falha ao ler {CREDENTIALS_PATH}: {e}")
+else:
+    if DEBUG:
+        print(f"⚠️ {CREDENTIALS_PATH} não encontrado — tentando variáveis de ambiente (.env)")
+
+if not GOOGLE_CLIENT_ID:
+    GOOGLE_CLIENT_ID = (
+        config('GOOGLE_CLIENT_ID', default=None)
+        or os.environ.get('GOOGLE_CLIENT_ID')
+        or config('GOOGLE_CLOUD_CLIENT_ID', default=None)
+        or os.environ.get('GOOGLE_CLOUD_CLIENT_ID')
+    )
+
+if not GOOGLE_CLIENT_SECRET:
+    GOOGLE_CLIENT_SECRET = (
+        config('GOOGLE_CLIENT_SECRET', default=None)
+        or os.environ.get('GOOGLE_CLIENT_SECRET')
+        or config('GOOGLE_CLOUD_CLIENT_SECRET', default=None)
+        or os.environ.get('GOOGLE_CLOUD_CLIENT_SECRET')
+    )
+
+# aviso de dev se não achar nada
+if DEBUG and (not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET):
+    print("⚠️ GOOGLE client credentials não configuradas. Coloque credentials.json na raiz do backend ou defina as variáveis de ambiente.")
+
+
+
+
+
+
 
 
 # Application definition
@@ -41,12 +97,14 @@ INSTALLED_APPS = [
 
     'rest_framework',
     'rest_framework.authtoken',
+    'rest_framework_simplejwt',
     'django.contrib.sites', # Requerido pelo allauth
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google', # Provedor do Google
     'dj_rest_auth',
+    'corsheaders',
     'dj_rest_auth.registration',
 
     # Nossos Apps (adicione estas linhas)
@@ -57,19 +115,26 @@ INSTALLED_APPS = [
 
 SITE_ID = 1
 
+
 AUTHENTICATION_BACKENDS = [
     # Needed to login by username in Django admin, regardless of `allauth`
     'django.contrib.auth.backends.ModelBackend',
+
     # `allauth` specific authentication methods, such as login by e-mail
     'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
-ACCOUNT_EMAIL_VERIFICATION = 'none'
-ACCOUNT_AUTHENTICATION_METHOD = 'email'
-ACCOUNT_EMAIL_REQUIRED = True
+# Configurações específicas do allauth
+ACCOUNT_LOGIN_METHOD = 'email'
 ACCOUNT_UNIQUE_EMAIL = True
-ACCOUNT_USERNAME_REQUIRED = False
+ACCOUNT_EMAIL_VERIFICATION = 'none' # Para o nosso caso, não precisa de verificação de email
 
+# Adiciona o adaptador de conta social que permite login sem a necessidade de um modelo de 'socialaccount' explícito
+ACCOUNT_ADAPTER = 'allauth.socialaccount.adapter.DefaultSocialAccountAdapter'
+SOCIALACCOUNT_ADAPTER = 'allauth.socialaccount.adapter.DefaultSocialAccountAdapter'
+
+
+# Configurações do Provedor Google
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
         'SCOPE': [
@@ -77,15 +142,19 @@ SOCIALACCOUNT_PROVIDERS = {
             'email',
         ],
         'AUTH_PARAMS': {
-            'access_type': 'online',
-            # Esta é a linha MÁGICA que restringe o login ao domínio!
-            'hd': 'camaraitapoa.sc.gov.br'
+            'access_type': 'offline',
         },
-        'OAUTH_PKCE_ENABLED': True,
+        # Informa ao allauth para usar o fluxo de 'auth-code'
+        'OAUTH_PKCE_ENABLED': True, 
     }
 }
 
+# Configurações do dj-rest-auth para usar JWT
+REST_USE_JWT = True
+JWT_AUTH_COOKIE = 'diarias-app-auth' # Nome do cookie para autenticação
+
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -95,6 +164,13 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+# Opcional: Se você precisar enviar cookies ou cabeçalhos de autorização
+CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = 'diarias_app.urls'
 
@@ -177,16 +253,21 @@ LOGIN_REDIRECT_URL = '/'
 ACCOUNT_ADAPTER = 'allauth.account.adapter.DefaultAccountAdapter'
 
 # REST framework (autorizações / autenticação)
+# settings.py (versão corrigida e robusta)
+
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework.authentication.SessionAuthentication',
-        'rest_framework.authentication.TokenAuthentication',
-    ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'dj_rest_auth.jwt_auth.JWTAuthentication', # <-- Mude para autenticação JWT
+        'rest_framework.authentication.SessionAuthentication',
     ),
 }
 
 # Caso queira timezone do Brasil
 TIME_ZONE = 'America/Sao_Paulo'
 USE_TZ = True
+
+
+GOOGLE_MAPS_API_KEY = config('GOOGLE_MAPS_API_KEY', default=None)

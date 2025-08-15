@@ -3,6 +3,10 @@ import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Login } from './pages/Login';
 import { useAuth } from './context/AuthContext';
+import { CompleteProfile } from './pages/CompleteProfile';
+import { SelectRole } from './pages/SelectRole'; 
+import { AppLayout } from './components/Layout';
+import { NovaDiaria } from './pages/NovaDiaria';
 
 // Aceita qualquer nó React e evita depender do namespace JSX
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
@@ -25,19 +29,31 @@ function App(): React.ReactElement {
     <Routes>
       <Route path="/login" element={<Login />} />
 
+      {/* 2. Envolvemos todas as rotas privadas em uma rota "mãe" com o AppLayout */}
       <Route
-        path="/dashboard"
+        path="/*"
         element={
           <PrivateRoute>
-            <div>
-              <h1>Dashboard - Bem-vindo!</h1>
-              <p>Login realizado com sucesso.</p>
-            </div>
+            <AppLayout>
+              <Routes>
+                <Route path="/complete-profile" element={<CompleteProfile />} />
+                <Route path="/select-role" element={<SelectRole />} />
+                <Route
+                  path="/dashboard"
+                  element={
+                    <div>
+                      <h1>Dashboard</h1>
+                      <p>Você está logado com o perfil: <strong>{useAuth().activeRole}</strong></p>
+                    </div>
+                  }
+                />
+                <Route path="/diarias/nova" element={<NovaDiaria />} />
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </Routes>
+            </AppLayout>
           </PrivateRoute>
         }
       />
-
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 }

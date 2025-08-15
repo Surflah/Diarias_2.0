@@ -29,3 +29,5 @@ Thumbs.db
 
 # Pasta de arquivos estáticos coletados
 /staticfiles/
+
+credentials.json

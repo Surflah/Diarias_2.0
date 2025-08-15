@@ -1,111 +1,113 @@
 # backend/core/services/calculos_service.py
+
 import requests
 from decimal import Decimal
-from datetime import timedelta
+from datetime import datetime
 from django.conf import settings
-from ..models import ParametrosSistema, Processo
+from ..models import ParametrosSistema
 
-# Constantes para os valores base em UPM
-UPM_COM_PERNOITE_G1 = 100
-UPM_SEM_PERNOITE_G1 = 40
-UPM_MEIA_DIARIA_G1 = 20
-#... adicione os outros valores do decreto para G2
+# --- Constantes para as regras de negócio ---
 
-def calcular_diarias(processo: Processo) -> dict:
+# Cidades que pertencem ao Grupo 1, conforme Decreto 291/2025
+CIDADES_GRUPO_1 = ['florianopolis', 'curitiba']
+
+# Fatores de multiplicação da UPM para cada tipo de diária.
+# Usar um dicionário torna o código mais limpo e fácil de manter.
+VALORES_DIARIA_UPM = {
+    'grupo_1': {
+        'com_pernoite': Decimal('100.00'),
+        'sem_pernoite': Decimal('40.00'),
+        'meia_diaria': Decimal('20.00'),
+    },
+    'grupo_2': {
+        'com_pernoite': Decimal('200.00'),
+        'sem_pernoite': Decimal('80.00'),
+        'meia_diaria': Decimal('20.00'),
+    }
+}
+
+class CalculoServiceError(Exception):
+    """Exceção customizada para erros nos serviços de cálculo."""
+    pass
+
+
+def calcular_valor_diarias(destino: str, data_saida: datetime, data_retorno: datetime) -> Decimal:
     """
-    Calcula o valor total das diárias com base na duração e destino da viagem.
-    Retorna um dicionário com o valor total e detalhes do cálculo.
-    """
-    try:
-        parametros = ParametrosSistema.objects.first()
-        if not parametros:
-            raise ValueError("Parâmetros do sistema não configurados.")
-
-        valor_upm = parametros.valor_upm
-        duracao_total = processo.data_retorno - processo.data_saida
-        
-        # --- Lógica para determinar a quantidade de cada tipo de diária ---
-        # Esta é uma lógica simplificada e precisa ser refinada com as regras de negócio exatas.
-        # Ex: Como contar pernoites? Como tratar viagens que cruzam a meia-noite?
-        
-        dias_completos = duracao_total.days
-        horas_restantes = duracao_total.seconds / 3600
-        
-        num_com_pernoite = dias_completos
-        num_sem_pernoite = 0
-        num_meia_diaria = 0
-
-        if horas_restantes > 12:
-            num_sem_pernoite = 1  # Cobre exclusivamente alimentação e locomoção urbana, quando o afastamento exceder 12 (doze) horas diárias [cite: 79]
-        elif 4 < horas_restantes <= 12: # Assumindo que uma viagem de menos de 4h não gera diária
-            num_meia_diaria = 1 # Cobre exclusivamente alimentação e locomoção urbana, quando o afastamento for inferior a 12 (doze) horas diárias [cite: 80]
-        
-        # --- Lógica para determinar o grupo de destino ---
-        # Por enquanto, uma lógica simples. Pode ser expandida no futuro.
-        destino_lower = processo.destino.lower()
-        if 'florianópolis' in destino_lower or 'curitiba' in destino_lower:
-            # Grupo 1
-            total = (num_com_pernoite * UPM_COM_PERNOITE_G1 * valor_upm) + \
-                    (num_sem_pernoite * UPM_SEM_PERNOITE_G1 * valor_upm) + \
-                    (num_meia_diaria * UPM_MEIA_DIARIA_G1 * valor_upm)
-        else:
-            # Assumindo Grupo 2 para os demais casos por enquanto
-            # Substituir pelos valores corretos de UPM para Grupo 2
-            total = 0 # Implementar
-            
-        return {
-            "valor_total": total,
-            "detalhes": {
-                "com_pernoite": num_com_pernoite,
-                "sem_pernoite": num_sem_pernoite,
-                "meia_diaria": num_meia_diaria
-            }
-        }
-
-    except Exception as e:
-        # É importante tratar erros, como a falta de parâmetros
-        return {"valor_total": Decimal("0.0"), "error": str(e)}
-
-
-def calcular_deslocamento(destino: str) -> dict:
-    """
-    Calcula o valor da indenização por deslocamento usando a API do Google Maps.
-    Retorna um dicionário com o valor total e a distância.
+    Calcula o valor total das diárias com base no destino e no período.
+    Esta função é "pura", não depende de um objeto Processo,
+    o que a torna ideal para a API de preview.
     """
     try:
         parametros = ParametrosSistema.objects.first()
-        if not parametros:
-            raise ValueError("Parâmetros do sistema não configurados.")
-        
-        # = settings.Google Maps_API_KEY # Adicione esta variável ao seu .env e settings.py
-        origem = "Câmara Municipal de Itapoá, SC" # Ponto de partida fixo [cite: 195]
+        if not parametros or not parametros.valor_upm:
+            raise CalculoServiceError("Valor da UPM não cadastrado nos parâmetros do sistema.")
+    except ParametrosSistema.DoesNotExist:
+        raise CalculoServiceError("Parâmetros do sistema não encontrados.")
 
-        # Monta a URL para a API de Rotas
+    if not all([destino, data_saida, data_retorno]) or data_retorno <= data_saida:
+        return Decimal('0.00')
+
+    grupo = 'grupo_1' if destino.lower().strip() in CIDADES_GRUPO_1 else 'grupo_2'
+    
+    duracao_total = data_retorno - data_saida
+    total_horas = duracao_total.total_seconds() / 3600
+    
+    numero_pernoites = duracao_total.days
+    horas_restantes = total_horas - (numero_pernoites * 24)
+
+    valor_total_upm = Decimal('0.00')
+    valor_total_upm += numero_pernoites * VALORES_DIARIA_UPM[grupo]['com_pernoite']
+    
+    if horas_restantes >= 12:
+        valor_total_upm += VALORES_DIARIA_UPM[grupo]['sem_pernoite']
+    elif horas_restantes > 4:
+        valor_total_upm += VALORES_DIARIA_UPM[grupo]['meia_diaria']
+    
+    valor_calculado = valor_total_upm * parametros.valor_upm
+    
+    return round(valor_calculado, 2)
+
+
+def calcular_valor_deslocamento(destino: str) -> dict:
+    """
+    Calcula o valor da indenização por deslocamento usando a API de Rotas.
+    Retorna um dicionário com o valor e a distância.
+    """
+    try:
+        parametros = ParametrosSistema.objects.first()
+        if not parametros or not parametros.preco_medio_gasolina:
+            raise CalculoServiceError("Preço da gasolina não cadastrado nos parâmetros do sistema.")
+        
+        # CORREÇÃO: Pega a chave da API a partir das configurações do Django
+        api_key = settings.GOOGLE_MAPS_API_KEY
+        if not api_key:
+            raise CalculoServiceError("GOOGLE_MAPS_API_KEY não configurada no backend.")
+
+        origem = "Câmara Municipal de Itapoá, SC"
         url = f"https://maps.googleapis.com/maps/api/directions/json?origin={origem}&destination={destino}&key={api_key}"
         
         response = requests.get(url)
-        response.raise_for_status() # Lança um erro para respostas ruins (4xx ou 5xx)
-        
+        response.raise_for_status()
         data = response.json()
         
         if data['status'] == 'OK':
-            # Pega a distância em metros da primeira rota encontrada
             distancia_metros = data['routes'][0]['legs'][0]['distance']['value']
             distancia_km = Decimal(distancia_metros / 1000)
-            
-            # A fórmula considera a distância total (ida e volta)
             distancia_total_km = distancia_km * 2
             
-            # Aplica a fórmula do Decreto 291/2025
             preco_gasolina = parametros.preco_medio_gasolina
-            valor = (distancia_total_km / Decimal(10)) * preco_gasolina # [cite: 184]
+            valor = (distancia_total_km / Decimal(10)) * preco_gasolina
             
             return {
-                "valor_deslocamento": valor.quantize(Decimal("0.01")),
-                "distancia_km": distancia_total_km.quantize(Decimal("0.1"))
+                "valor_deslocamento": round(valor, 2),
+                "distancia_km": round(distancia_total_km, 1)
             }
         else:
-            raise ValueError(f"Erro na API do Google Maps: {data.get('error_message', data['status'])}")
+            # Retorna um erro claro para o frontend, se possível
+            error_message = data.get('error_message', data['status'])
+            raise CalculoServiceError(f"Erro na API de Rotas: {error_message}")
 
-    except Exception as e:
-        return {"valor_deslocamento": Decimal("0.0"), "distancia_km": 0, "error": str(e)}
+    except requests.exceptions.RequestException as e:
+        raise CalculoServiceError(f"Erro de comunicação com a API de Rotas: {e}")
+    except (KeyError, IndexError):
+        raise CalculoServiceError("Resposta inesperada da API de Rotas. O destino é válido?")
