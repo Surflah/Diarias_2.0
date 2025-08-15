@@ -1,4 +1,3 @@
-// frontend/src/components/NovaDiaria.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { PlacesAutocomplete } from '../components/PlacesAutocomplete';
@@ -42,6 +41,8 @@ interface FormFields {
   solicita_pagamento_inscricao: boolean;
   valor_taxa_inscricao: number;
   observacoes: string;
+
+  // campos mantidos para uso interno (agora calculados automaticamente)
   regiao_diaria: Region;
   tipo_diaria: TipoDiaria;
   num_com_pernoite: number;
@@ -98,8 +99,16 @@ export const NovaDiaria = () => {
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculoError, setCalculoError] = useState('');
 
+  // novos estados locais
+  const [capitalsList, setCapitalsList] = useState<string[]>([]);
+  const [isLoadingConfig, setIsLoadingConfig] = useState(false);
+
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement> | any) => {
     const { name, value, type, checked } = event.target;
+    // nota: não permitir que o usuário altere campos calculados (valor_upm, num_*)
+    if (['valor_upm', 'num_com_pernoite', 'num_sem_pernoite', 'num_meia_diaria', 'regiao_diaria'].includes(name)) {
+      return;
+    }
     setFormData(prev => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : (type === 'number' ? (Number(value) || 0) : value),
@@ -114,46 +123,154 @@ export const NovaDiaria = () => {
     ? formData.data_retorno.diff(formData.data_saida, 'day') + 1
     : 0;
 
-  // Trigger cálculo via API (aceita destino opcional)
-  const triggerCalculation = useCallback(async (optionalDestino?: string) => {
+  // busca config (valor_upm e capitais) ao montar
+  useEffect(() => {
+    const loadConfig = async () => {
+      setIsLoadingConfig(true);
+      try {
+        const res = await apiClient.get('/config/');
+        const valorUpm = Number(res.data.valor_upm) || initialFormData.valor_upm;
+        const capitais = Array.isArray(res.data.capitais) ? res.data.capitais : [];
+        setCapitalsList(capitais.map((c: string) => c.toLowerCase()));
+        setFormData(prev => ({ ...prev, valor_upm: valorUpm }));
+      } catch (err) {
+        console.warn('Erro ao carregar config /config/:', err);
+      } finally {
+        setIsLoadingConfig(false);
+      }
+    };
+    loadConfig();
+  }, []);
+
+    const triggerCalculation = useCallback(async (optionalDestino?: string) => {
+    // validações rápidas
     if (!formData.data_saida || !formData.data_retorno) return;
-    // garantindo que retorno >= saida
     if (!formData.data_retorno.isAfter(formData.data_saida) && !formData.data_retorno.isSame(formData.data_saida)) return;
 
     const destinoToSend = optionalDestino ?? formData.destino;
-    if (!destinoToSend) return; // sem destino não manda
+    if (!destinoToSend) return;
 
     setIsCalculating(true);
     setCalculoError('');
+
     try {
-      const payload = {
+        const payload: any = {
         destino: destinoToSend,
         data_saida: formData.data_saida.toISOString(),
         data_retorno: formData.data_retorno.toISOString(),
-      };
-      const response = await apiClient.post<CalculoData>('/processos/calcular-preview/', payload);
-      setCalculoData(response.data);
-    } catch (error: any) {
-      console.error('calcular-preview status:', error?.response?.status);
-      console.error('calcular-preview response.data:', error?.response?.data);
-      setCalculoError(
-          error?.response?.data?.error ||
-          (error?.response?.data ? JSON.stringify(error.response.data) : 'Erro ao calcular valores.')
-     );
-     setCalculoData(initialCalculoData);
-    } finally {
-     setIsCalculating(false);
-    }
-  }, [formData.destino, formData.data_saida, formData.data_retorno]);
+        num_com_pernoite: formData.num_com_pernoite,
+        num_sem_pernoite: formData.num_sem_pernoite,
+        num_meia_diaria: formData.num_meia_diaria,
+        regiao_diaria: formData.regiao_diaria,
+        };
 
-  // when user selects a place from autocomplete
-  const handlePlaceSelect = (address: string) => {
-    setFormData(prev => ({ ...prev, destino: address }));
-    // pede cálculo ao backend já com o destino selecionado
-    triggerCalculation(address);
+        if (formData.meio_transporte && formData.meio_transporte.trim() !== '') {
+        payload.meio_transporte = formData.meio_transporte;
+        }
+
+        // DEBUG: inspeccionar payload no console (remova em prod)
+        console.debug('triggerCalculation payload:', payload);
+
+        const response = await apiClient.post<CalculoData>('/processos/calcular-preview/', payload);
+
+        // atualiza cálculo exibido
+        setCalculoData(response.data);
+
+        // atualiza campos internos (sincronizar com o que backend retornou)
+        setFormData(prev => ({
+        ...prev,
+        num_com_pernoite: response.data.calculo_diarias.num_com_pernoite ?? 0,
+        num_sem_pernoite: response.data.calculo_diarias.num_sem_pernoite ?? 0,
+        num_meia_diaria: response.data.calculo_diarias.num_meia_diaria ?? 0,
+        valor_upm: response.data.calculo_diarias.valor_upm_usado ?? prev.valor_upm,
+        }));
+    } catch (error: any) {
+        console.error('calcular-preview status:', error?.response?.status);
+        console.error('calcular-preview response.data:', error?.response?.data);
+        setCalculoError(
+        error?.response?.data?.error ||
+        (error?.response?.data ? JSON.stringify(error.response.data) : 'Erro ao calcular valores.')
+        );
+        setCalculoData(initialCalculoData);
+    } finally {
+        setIsCalculating(false);
+    }
+    // inclua todas as dependências usadas dentro da função
+    }, [
+        formData.data_saida,
+        formData.data_retorno,
+        formData.destino,
+        formData.meio_transporte,
+        formData.num_com_pernoite,
+        formData.num_sem_pernoite,
+        formData.num_meia_diaria,
+        formData.regiao_diaria,
+        formData.valor_upm,
+    ]);
+
+    useEffect(() => {
+        // evita disparo quando dados mínimos não estão prontos
+        if (!formData.data_saida || !formData.data_retorno) return;
+        if (!formData.destino) return;
+
+        // dispara cálculo (sem destino opcional — usa o formData.destino atual)
+        triggerCalculation();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        formData.destino,
+        formData.data_saida,
+        formData.data_retorno,
+        formData.meio_transporte,
+        formData.regiao_diaria,
+        formData.num_com_pernoite,
+        formData.num_sem_pernoite,
+        formData.num_meia_diaria,
+        triggerCalculation,
+    ]);
+  // quando user seleciona lugar no autocomplete: agora recebe objeto com address components
+  const handlePlaceSelect = (selection: {
+    description: string;
+    placeId?: string;
+    addressComponents?: google.maps.GeocoderAddressComponent[];
+    latLng?: { lat: number; lng: number };
+  }) => {
+    const { description, addressComponents } = selection;
+    // seta destino
+    setFormData(prev => ({ ...prev, destino: description }));
+
+    // inferir cidade a partir dos address components (preferencial) ou da string
+    const getCityFromAddressComponents = (comps?: google.maps.GeocoderAddressComponent[]) => {
+      if (!comps || comps.length === 0) return '';
+      const cityComp = comps.find(c => c.types.includes('administrative_area_level_2')) ||
+                       comps.find(c => c.types.includes('locality')) ||
+                       comps.find(c => c.types.includes('sublocality')) ||
+                       comps.find(c => c.types.includes('administrative_area_level_1'));
+      return cityComp ? cityComp.long_name.toLowerCase() : '';
+    };
+
+    const city = getCityFromAddressComponents(addressComponents) || description.split(',')[0].trim().toLowerCase();
+
+    // inferir região usando a lista de capitais carregada
+    const inferRegion = (cityName: string): Region => {
+      const normalized = cityName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      // tratar casos explícitos
+      if (normalized === 'florianopolis' || normalized === 'florianópolis' || normalized === 'curitiba') return 'LOCAL';
+      if (normalized === 'brasilia' || normalized === 'brasília') return 'OUTROS';
+      // se estiver na lista de capitais -> OUTROS, senão -> LOCAL (interior)
+      if (capitalsList.length > 0 && capitalsList.includes(normalized)) return 'OUTROS';
+      return 'LOCAL';
+    };
+
+    const inferredRegion = inferRegion(city);
+
+    // atualiza state (regiao calculada) — não exposto ao usuário para alteração manual
+    setFormData(prev => ({ ...prev, regiao_diaria: inferredRegion }));
+
+    // dispara cálculo (preview) com o destino selecionado
+    triggerCalculation(description);
   };
 
-  // Função que aplica a lógica de distribuição das diárias conforme regras que você descreveu
+  // Função que aplica a lógica de distribuição das diárias conforme regras
   const applyDiariasDistribution = useCallback(() => {
     const N = numeroDeDiarias;
     let num_com = 0, num_sem = 0, num_meia = 0;
@@ -161,19 +278,14 @@ export const NovaDiaria = () => {
     const antecipada = formData.solicita_viagem_antecipada;
 
     if (N <= 0) {
-      // zerar
       num_com = num_sem = num_meia = 0;
     } else if (N === 1) {
-      // Deve perguntar ao usuário: meia diária ou sem pernoite
-      // Aqui mantemos por padrão: se tipo_diaria já for MEIA_DIARIA => meia; if SEM_PERNOITE => sem
-      // Se tipo estiver COM_PERNOITE e N===1 mostramos opção ao usuário (via RadioGroup abaixo)
       if (tipo === 'SEM_PERNOITE') {
         num_sem = 1;
       } else if (tipo === 'MEIA_DIARIA') {
         num_meia = 1;
       } else {
-        // COM_PERNOITE + 1 dia -> precisamos que o usuário escolha; por enquanto mantemos sem pernoite (vai mostrar escolha UI)
-        // não sobrescrever aqui; UI radios irão definir um campo auxiliar 'tipo_unico_dia_choice'
+        // manter sem alterar; UI de escolha lida com isso
       }
     } else { // N >= 2
       if (tipo === 'SEM_PERNOITE') {
@@ -182,19 +294,16 @@ export const NovaDiaria = () => {
         num_meia = N;
       } else if (tipo === 'COM_PERNOITE') {
         if (antecipada) {
-          // 1 meia + (N-1) com pernoite
           num_meia = 1;
           num_com = N - 1;
         } else {
-          // (N-1) com pernoite + 1 sem pernoite
           num_com = N - 1;
           num_sem = 1;
         }
       }
     }
 
-    // se usuário tiver escolhido explicitamente radios para o caso 1-dia, respeitar:
-    // (guardado em formData.num_* se já ajustado por UI)
+    // grava os valores calculados no state (interno)
     setFormData(prev => ({
       ...prev,
       num_com_pernoite: num_com,
@@ -203,42 +312,57 @@ export const NovaDiaria = () => {
     }));
   }, [numeroDeDiarias, formData.tipo_diaria, formData.solicita_viagem_antecipada]);
 
-  // quando datas / tipo / antecipada mudam, recalcula distribuição
   useEffect(() => {
     applyDiariasDistribution();
   }, [applyDiariasDistribution]);
 
   useEffect(() => {
     if (numeroDeDiarias === 1 && formData.tipo_diaria === 'COM_PERNOITE') {
-      // Define 'Sem Pernoite' como o novo padrão para evitar um estado inválido
       setFormData(prev => ({ ...prev, tipo_diaria: 'SEM_PERNOITE' }));
     }
   }, [numeroDeDiarias, formData.tipo_diaria]);
 
   // cálculos monetários + deslocamento (usando UPM_TABLE + distancia vindo de calculoData)
-  useEffect(() => {
-    const valorUpm = Number(formData.valor_upm) || 0;
-    const num_com = Number(formData.num_com_pernoite) || 0;
-    const num_sem = Number(formData.num_sem_pernoite) || 0;
-    const num_meia = Number(formData.num_meia_diaria) || 0;
-    const region = formData.regiao_diaria;
+  // cálculos monetários + deslocamento (usando UPM_TABLE + distancia vindo de calculoData)
+// Substituir o useEffect antigo por este bloco
+// cálculos monetários + deslocamento (usando UPM_TABLE + distancia vindo de calculoData)
+useEffect(() => {
+    // Prioridade: usar valores que já vieram do backend (calculoData), mas permitir overrides vindos do frontend (formData.num_*)
+    const valorUpm = Number((calculoData?.calculo_diarias?.valor_upm_usado ?? formData.valor_upm) || 0);
+
+    const num_com = Number(formData.num_com_pernoite || calculoData.calculo_diarias.num_com_pernoite || 0);
+    const num_sem = Number(formData.num_sem_pernoite || calculoData.calculo_diarias.num_sem_pernoite || 0);
+    const num_meia = Number(formData.num_meia_diaria || calculoData.calculo_diarias.num_meia_diaria || 0);
+
+    const region = formData.regiao_diaria || 'LOCAL';
 
     const upmCom = UPM_TABLE[region].COM_PERNOITE;
     const upmSem = UPM_TABLE[region].SEM_PERNOITE;
     const upmMeia = UPM_TABLE[region].MEIA_DIARIA;
 
+    // cálculo local (se backend não tiver retornado)
     const totalUpm = (num_com * upmCom) + (num_sem * upmSem) + (num_meia * upmMeia);
-    const valor_total_diarias = totalUpm * valorUpm;
+    const local_valor_total_diarias = totalUpm * valorUpm;
 
+    // preferir o valor do backend se disponível
+    const valor_total_diarias = Number(calculoData?.calculo_diarias?.valor_total_diarias ?? local_valor_total_diarias);
+
+    // deslocamento: preferir o valor calculado pelo backend (se disponível)
     const distancia_km = calculoData.calculo_deslocamento.distancia_km || 0;
     const preco_gas = Number(calculoData.calculo_deslocamento.preco_gas_usado) || 0;
-    const valor_deslocamento = (distancia_km / 10) * preco_gas;
+    const valor_deslocamento =
+    formData.meio_transporte === 'VEICULO_PROPRIO'
+        ? (distancia_km / 10) * preco_gas
+        : 0;
 
-    const total_empenhar = valor_total_diarias + valor_deslocamento + (formData.solicita_pagamento_inscricao ? Number(formData.valor_taxa_inscricao || 0) : 0);
+    // --- ATENÇÃO: somar deslocamento somente se veículo próprio ---
+    const incluirDeslocamento = formData.meio_transporte === 'VEICULO_PROPRIO';
+    const total_empenhar = Number(valor_total_diarias || 0) + (incluirDeslocamento ? Number(valor_deslocamento || 0) : 0);
+
 
     setCalculoData(prev => ({
-      ...prev,
-      calculo_diarias: {
+        ...prev,
+        calculo_diarias: {
         num_com_pernoite: num_com,
         upm_com_pernoite: upmCom,
         total_com_pernoite: num_com * upmCom * valorUpm,
@@ -250,15 +374,27 @@ export const NovaDiaria = () => {
         total_meia_diaria: num_meia * upmMeia * valorUpm,
         valor_upm_usado: valorUpm,
         valor_total_diarias,
-      },
-      calculo_deslocamento: {
+        },
+        calculo_deslocamento: {
         ...prev.calculo_deslocamento,
+        distancia_km: distancia_km || prev.calculo_deslocamento.distancia_km,
+        preco_gas_usado: preco_gas || prev.calculo_deslocamento.preco_gas_usado,
         valor_deslocamento,
-      },
-      total_empenhar,
+        },
+        total_empenhar,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.num_com_pernoite, formData.num_sem_pernoite, formData.num_meia_diaria, formData.regiao_diaria, formData.valor_upm, formData.solicita_pagamento_inscricao, formData.valor_taxa_inscricao, calculoData.calculo_deslocamento.distancia_km]);
+    }, [
+    formData.num_com_pernoite,
+    formData.num_sem_pernoite,
+    formData.num_meia_diaria,
+    formData.regiao_diaria,
+    formData.valor_upm,
+    formData.solicita_pagamento_inscricao,
+    formData.valor_taxa_inscricao,
+    calculoData.calculo_deslocamento.distancia_km,
+    formData.meio_transporte,
+    ]);
 
   // preview image / files (mantive seu código)
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -370,26 +506,26 @@ Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia re
               )}
             </Grid>
 
-            {/* Autocomplete de destino */}
-            {/* --- INÍCIO DA ALTERAÇÃO --- */}
-
-            {/* Autocomplete de destino */}
+            {/* Autocomplete de destino - agora retorna address components */}
             <Grid size={{ xs: 12, sm: 8 }}>
-            <PlacesAutocomplete onSelect={handlePlaceSelect} />
+              <PlacesAutocomplete onSelect={handlePlaceSelect} />
+              <Typography variant="caption" display="block">
+                A região (Local / Outras Capitais) será inferida automaticamente a partir do destino informado.
+              </Typography>
             </Grid>
 
             {/* Campo para mostrar a distância calculada */}
             <Grid size={{ xs: 12, sm: 4 }}>
-            <TextField
+              <TextField
                 label="Distância (ida e volta)"
                 value={
-                isCalculating ? 'Calculando...' :
-                (calculoData.calculo_deslocamento.distancia_km > 0 ? `${calculoData.calculo_deslocamento.distancia_km} km` : '')
+                  isCalculating ? 'Calculando...' :
+                  (calculoData.calculo_deslocamento.distancia_km > 0 ? `${calculoData.calculo_deslocamento.distancia_km} km` : '')
                 }
                 fullWidth
                 InputProps={{ readOnly: true }}
                 variant="filled"
-            />
+              />
             </Grid>
 
             <Grid size={{ xs: 12, sm: 6 }}>
@@ -410,17 +546,6 @@ Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia re
               </Grid>
             )}
 
-            {/* Tipo de diária + região */}
-            <Grid size={{ xs: 12, sm: 4 }}>
-              <FormControl fullWidth>
-                <InputLabel>Região da Diária</InputLabel>
-                <Select name="regiao_diaria" value={formData.regiao_diaria} onChange={handleInputChange as any} label="Região da Diária">
-                  <MenuItem value="LOCAL">Florianópolis / Curitiba / Interior</MenuItem>
-                  <MenuItem value="OUTROS">Outras Capitais / Exterior</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-
             <Grid size={{ xs: 12, sm: 4 }}>
                 <FormControl fullWidth>
                     <InputLabel>Tipo de Diária </InputLabel>
@@ -431,23 +556,6 @@ Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia re
                     <MenuItem value="MEIA_DIARIA">Meia Diária</MenuItem>
                     </Select>
                 </FormControl>
-            </Grid>
-
-            <Grid size={{ xs: 12, sm: 4 }}>
-              <TextField name="valor_upm" label="Valor da UPM (R$)" value={formData.valor_upm} onChange={handleInputChange} type="number" fullWidth />
-            </Grid>
-
-            {/* Campos que mostram os contadores (são preenchidos pela lógica) */}
-            <Grid size={{ xs: 12, sm: 4 }}>
-              <TextField name="num_com_pernoite" label="Quant. Com Pernoite" value={formData.num_com_pernoite} onChange={handleInputChange} type="number" fullWidth />
-            </Grid>
-
-            <Grid size={{ xs: 12, sm: 4 }}>
-              <TextField name="num_sem_pernoite" label="Quant. Sem Pernoite" value={formData.num_sem_pernoite} onChange={handleInputChange} type="number" fullWidth />
-            </Grid>
-
-            <Grid size={{ xs: 12, sm: 4 }}>
-              <TextField name="num_meia_diaria" label="Quant. Meia Diária" value={formData.num_meia_diaria} onChange={handleInputChange} type="number" fullWidth />
             </Grid>
 
             {/* Ponto móvel obrigatório — já fixo como SIM */}
@@ -558,10 +666,6 @@ Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia re
                   </Table>
                 </TableContainer>
 
-                <Button sx={{ mt: 1 }} onClick={() => {
-                  // dev helper
-                  setCalculoData(prev => ({ ...prev, calculo_deslocamento: { ...prev.calculo_deslocamento, distancia_km: 120 } }));
-                }}>Simular distância 120 km</Button>
               </Grid>
             )}
 

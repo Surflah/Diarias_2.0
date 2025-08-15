@@ -5,6 +5,7 @@ from core.models import Processo, ParametrosSistema, Feriado, Profile, Role
 from common.models import User
 from rest_framework import serializers
 
+MEIOS_TRANSPORTE = ('VEICULO_PROPRIO', 'AEREO', 'ONIBUS', 'CARONA')
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -78,9 +79,25 @@ class CalculoPreviewSerializer(serializers.Serializer):
     Valida os dados necessários para o cálculo de preview de uma diária.
     Não está ligado a nenhum modelo, apenas define os campos esperados.
     """
-    destino = serializers.CharField(max_length=255)
+    destino = serializers.CharField()
     data_saida = serializers.DateTimeField()
     data_retorno = serializers.DateTimeField()
+    # novos campos opcionais (envio pelo frontend)
+    num_com_pernoite = serializers.IntegerField(required=False, min_value=0)
+    num_sem_pernoite = serializers.IntegerField(required=False, min_value=0)
+    num_meia_diaria = serializers.IntegerField(required=False, min_value=0)
+    regiao_diaria = serializers.ChoiceField(choices=[('LOCAL','LOCAL'),('OUTROS','OUTROS')], required=False)
+    meio_transporte = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+
+    def validate_meio_transporte(self, value):
+        """
+        Normaliza '' -> None e valida o valor se não vazio.
+        """
+        if value in (None, ''):
+            return None
+        if value not in MEIOS_TRANSPORTE:
+            raise serializers.ValidationError("meio_transporte inválido")
+        return value
 
     def validate(self, data):
         """

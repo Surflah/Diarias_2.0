@@ -7,8 +7,16 @@ import usePlacesAutocomplete, {
 } from 'use-places-autocomplete';
 import { TextField, List, ListItem, ListItemText, Paper, Typography } from '@mui/material';
 
+interface PlaceSelection {
+  description: string;
+  placeId?: string;
+  addressComponents?: google.maps.GeocoderAddressComponent[];
+  latLng?: { lat: number; lng: number };
+}
+
 interface PlacesAutocompleteProps {
-  onSelect: (address: string) => void;
+  // agora retorna um objeto com mais detalhes (address components, latlng, placeId)
+  onSelect: (selection: PlaceSelection) => void;
 }
 
 export const PlacesAutocomplete = ({ onSelect }: PlacesAutocompleteProps) => {
@@ -29,10 +37,44 @@ export const PlacesAutocomplete = ({ onSelect }: PlacesAutocompleteProps) => {
     setValue(e.target.value);
   };
 
-  const handleSelect = (suggestion: google.maps.places.AutocompletePrediction) => () => {
+  const handleSelect = (suggestion: google.maps.places.AutocompletePrediction) => async () => {
+    // mostra o texto selecionado no input
     setValue(suggestion.description, false);
     clearSuggestions();
-    onSelect(suggestion.description);
+
+    try {
+      // tenta obter detalhes de geocode (address_components) a partir do place_id quando disponível
+      const placeId = suggestion.place_id;
+      let geocodeResults: google.maps.GeocoderResult[] | undefined;
+      if (placeId) {
+        geocodeResults = await getGeocode({ placeId });
+      }
+      // fallback: tentar obter geocode por address string
+      if ((!geocodeResults || geocodeResults.length === 0) && suggestion.description) {
+        geocodeResults = await getGeocode({ address: suggestion.description });
+      }
+
+      const addressComponents = geocodeResults && geocodeResults[0] ? geocodeResults[0].address_components : undefined;
+      let latLng;
+      if (geocodeResults && geocodeResults[0]) {
+        try {
+          latLng = await getLatLng(geocodeResults[0]);
+        } catch (err) {
+          // ignore latlng error
+          latLng = undefined;
+        }
+      }
+
+      onSelect({
+        description: suggestion.description,
+        placeId: placeId,
+        addressComponents,
+        latLng,
+      });
+    } catch (err) {
+      // se algo deu errado, ainda retorna a descrição (útil)
+      onSelect({ description: suggestion.description, placeId: suggestion.place_id });
+    }
   };
 
   return (
@@ -79,3 +121,5 @@ export const PlacesAutocomplete = ({ onSelect }: PlacesAutocompleteProps) => {
     </div>
   );
 };
+
+export default PlacesAutocomplete;

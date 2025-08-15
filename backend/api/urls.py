@@ -2,7 +2,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
-from .views import GoogleAuthView, UserProfileView, CalculoPreviewAPIView
+from .views import GoogleAuthView, UserProfileView, CalculoPreviewAPIView, ConfigDataView
 
 router = DefaultRouter()
 router.register(r'processos', views.ProcessoViewSet, basename='processo')
@@ -16,6 +16,7 @@ urlpatterns = [
     # outras rotas avulsas
     path("google-login/", GoogleAuthView.as_view(), name="google-login"),
     path('profile/me/', UserProfileView.as_view(), name='user-profile'),
+    path('config/', ConfigDataView.as_view(), name='config-data'),
 
     # por fim, as rotas geradas pelo router
     path('', include(router.urls)),
