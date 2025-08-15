@@ -48,8 +48,6 @@ class ProfileSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(source='user.first_name', required=False)
     last_name = serializers.CharField(source='user.last_name', required=False)
     email = serializers.EmailField(source='user.email', read_only=True)
-    
-    
     roles = serializers.SlugRelatedField(
         many=True,
         read_only=True,
@@ -58,7 +56,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Profile
-        fields = ('first_name', 'last_name', 'email', 'cpf', 'cargo', 'roles')
+        fields = ('first_name', 'last_name', 'email', 'cpf', 'cargo', 'lotacao', 'roles')
 
     def update(self, instance, validated_data):
         user_data = validated_data.pop('user', {})
@@ -66,6 +64,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 
         instance.cpf = validated_data.get('cpf', instance.cpf)
         instance.cargo = validated_data.get('cargo', instance.cargo)
+        instance.lotacao = validated_data.get('lotacao', instance.lotacao)
         instance.save()
 
         user.first_name = user_data.get('first_name', user.first_name)

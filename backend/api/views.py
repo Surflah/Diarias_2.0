@@ -153,7 +153,7 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 class CalculoPreviewAPIView(APIView):
     """
     Endpoint para calcular os valores de uma diária em tempo real (preview),
-    sem salvar um processo no banco de dados.
+    retornando uma análise detalhada dos cálculos.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -162,30 +162,31 @@ class CalculoPreviewAPIView(APIView):
         if serializer.is_valid():
             data = serializer.validated_data
             try:
-                # 1. Chama nossos serviços de cálculo
-                valor_diarias = calcular_valor_diarias(
+                # 1. Chama os serviços de cálculo que agora retornam dicionários detalhados
+                detalhes_diarias = calcular_valor_diarias(
                     destino=data['destino'],
                     data_saida=data['data_saida'],
                     data_retorno=data['data_retorno']
                 )
                 
-                deslocamento_info = calcular_valor_deslocamento(
+                detalhes_deslocamento = calcular_valor_deslocamento(
                     destino=data['destino']
                 )
 
-                # 2. Monta a resposta para o frontend
+                # 2. Combina os resultados em uma única resposta para o frontend
                 response_data = {
-                    'valor_total_diarias': valor_diarias,
-                    'valor_deslocamento': deslocamento_info.get('valor_deslocamento', 0),
-                    'distancia_km': deslocamento_info.get('distancia_km', 0),
-                    'valor_total_empenhar': valor_diarias + deslocamento_info.get('valor_deslocamento', 0)
+                    'calculo_diarias': detalhes_diarias,
+                    'calculo_deslocamento': detalhes_deslocamento,
+                    'total_empenhar': (
+                        detalhes_diarias['valor_total_diarias'] + 
+                        detalhes_deslocamento['valor_deslocamento']
+                    )
                 }
                 return Response(response_data, status=status.HTTP_200_OK)
 
             except CalculoServiceError as e:
-                # Se nossos serviços retornarem um erro (ex: UPM não cadastrada),
-                # enviamos uma resposta de erro clara para o frontend.
                 return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Se os dados de entrada forem inválidos (ex: data de retorno antes da saída)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+

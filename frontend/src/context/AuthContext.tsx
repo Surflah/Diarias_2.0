@@ -4,22 +4,22 @@ import React, { createContext, useState, useContext, ReactNode, useEffect } from
 import apiClient from '../api/axiosConfig';
 import { useNavigate } from 'react-router-dom';
 
-// --- Interfaces atualizadas ---
 interface UserProfile {
   first_name: string;
   last_name: string;
   email: string;
   cpf: string | null;
   cargo: string | null;
-  roles: string[]; // <-- NOVO: Lista de perfis do usuário
+  lotacao: string | null;
+  roles: string[]; 
 }
 
 interface AuthContextType {
   isAuthenticated: boolean;
   user: UserProfile | null;
   isLoading: boolean;
-  activeRole: string | null; // <-- NOVO: O perfil ativo na sessão
-  selectRole: (role: string) => void; // <-- NOVO: Função para selecionar o perfil
+  activeRole: string | null; 
+  selectRole: (role: string) => void; 
   logout: () => void;
   loginWithGoogle: (code: string) => Promise<void>;
 }
