@@ -27,6 +27,7 @@ class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     cpf = models.CharField(max_length=14, null=True, blank=True, help_text="Formato: 123.456.789-00")
     cargo = models.CharField(max_length=100, null=True, blank=True)
+    lotacao = models.CharField("Lotação", max_length=100, null=True, blank=True)
     roles = models.ManyToManyField(Role, blank=True, related_name='profiles', verbose_name="Perfis de Acesso")
 
     def __str__(self):
