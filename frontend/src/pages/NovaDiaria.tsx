@@ -41,6 +41,7 @@ interface FormFields {
   solicita_pagamento_inscricao: boolean;
   valor_taxa_inscricao: number;
   observacoes: string;
+  justificativa_viagem_antecipada: string;
 
   // campos mantidos para uso interno (agora calculados automaticamente)
   regiao_diaria: Region;
@@ -62,6 +63,7 @@ const initialFormData: FormFields = {
   solicita_pagamento_inscricao: false,
   valor_taxa_inscricao: 0,
   observacoes: '',
+  justificativa_viagem_antecipada: '',
   regiao_diaria: 'LOCAL',
   tipo_diaria: 'COM_PERNOITE',
   num_com_pernoite: 0,
@@ -98,6 +100,7 @@ export const NovaDiaria = () => {
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculoError, setCalculoError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   // novos estados locais
   const [capitalsList, setCapitalsList] = useState<string[]>([]);
@@ -114,6 +117,46 @@ export const NovaDiaria = () => {
       [name]: type === 'checkbox' ? checked : (type === 'number' ? (Number(value) || 0) : value),
     }));
   };
+
+   const handleSubmit = async () => {
+    const errors: Record<string, string> = {};
+    if (formData.solicita_viagem_antecipada) {
+      if (!formData.justificativa_viagem_antecipada || formData.justificativa_viagem_antecipada.trim() === '') {
+        errors.justificativa_viagem_antecipada = 'Informe a justificativa da viagem antecipada.';
+      }
+    }
+
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      // scroll to the field for better UX
+      const el = document.getElementsByName('justificativa_viagem_antecipada')[0] as HTMLElement | undefined;
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    // TODO: integrar com o envio real para o backend
+    // Exemplo: montar payload e chamar apiClient.post('/processos/solicitar/', payload)
+    // Por enquanto apenas console log para verificar
+    console.debug('Form ready to submit, payload:', formData);
+    // substituir pelo envio real quando integrar
+  };
+
+  const currencyFormatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  const formatCurrencyInput = (v: number) => {
+    // sempre retorna algo como "R$ 0,00"
+    return currencyFormatter.format(Number(v || 0));
+  };
+
+  const handleValorTaxaChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    // mantém somente dígitos; considera últimos 2 como centavos
+    const raw = e.target.value || '';
+    const digits = raw.replace(/\D/g, '');
+    const cents = digits === '' ? 0 : parseInt(digits, 10);
+    const value = cents / 100;
+    setFormData(prev => ({ ...prev, valor_taxa_inscricao: value }));
+  };
+
 
   const handleDateChange = (name: string, newValue: Dayjs | null) => {
     setFormData(prev => ({ ...prev, [name]: newValue }));
@@ -443,47 +486,92 @@ useEffect(() => {
 
         <Typography variant="h6" gutterBottom>Dados do Solicitante</Typography>
         <Grid container spacing={2} sx={{ mb: 3 }}>
-          <Grid container spacing={2}>
-            <TextField label="Solicitante" value={`${user?.first_name || ''} ${user?.last_name || ''}`} fullWidth InputProps={{ readOnly: true }} variant="filled" />
+          {/* Cada campo em sua própria linha para dar espaço para preenchimentos longos */}
+          <Grid size={{ xs: 12 }}>
+            <TextField
+              label="Solicitante"
+              value={`${user?.first_name || ''} ${user?.last_name || ''}`}
+              fullWidth
+              InputProps={{ readOnly: true }}
+              variant="filled"
+            />
           </Grid>
-          <Grid container spacing={2}>
-            <TextField label="CPF" value={user?.cpf || ''} fullWidth InputProps={{ readOnly: true }} variant="filled" />
+
+          <Grid size={{ xs: 12 }}>
+            <TextField
+              label="CPF"
+              value={user?.cpf || ''}
+              fullWidth
+              InputProps={{ readOnly: true }}
+              variant="filled"
+            />
           </Grid>
-          <Grid container spacing={2}>
-            <TextField label="Lotação" value={user?.lotacao || ''} fullWidth InputProps={{ readOnly: true }} variant="filled" />
+
+          <Grid size={{ xs: 12 }}>
+            <TextField
+              label="Lotação"
+              value={user?.lotacao || ''}
+              fullWidth
+              InputProps={{ readOnly: true }}
+              variant="filled"
+            />
           </Grid>
-          <Grid container spacing={2}>
-            <TextField label="Cargo/Função" value={user?.cargo || ''} fullWidth InputProps={{ readOnly: true }} variant="filled" />
+
+          <Grid size={{ xs: 12 }}>
+            <TextField
+              label="Cargo/Função"
+              value={user?.cargo || ''}
+              fullWidth
+              InputProps={{ readOnly: true }}
+              variant="filled"
+            />
           </Grid>
+
         </Grid>
 
         <Box component="form" noValidate autoComplete="off">
           <Grid container spacing={3}>
             <Grid size={{ xs: 12 }}><Typography variant="h6">Detalhes da Viagem</Typography></Grid>
 
-            <Grid size={{ xs: 12, sm:4  }}>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                name="finalidade_viagem"
+                label="Apresentar justificativa pormenorizada para a requisição da diária."
+                placeholder="Apresentar justificativa pormenorizada para a requisição da diária."
+                value={formData.finalidade_viagem}
+                onChange={handleInputChange}
+                multiline
+                rows={4}
+                fullWidth
+                sx={{ mb: 1 }}
+                helperText="Descreva a finalidade da viagem (objetivos, atividades previstas, etc.)."
+              />
+            </Grid>
+
+            {/* Datas e número de diárias: mesma linha responsiva */}
+            <Grid size={{ xs: 12, sm: 6, md: 4 }}>
               <DateTimePicker
                 label="Data e Hora da Saída"
                 value={formData.data_saida}
                 onChange={(v) => handleDateChange('data_saida', v)}
                 slotProps={{ textField: { fullWidth: true } }}
-                ampm={false} // 24h
+                ampm={false}
                 format="DD/MM/YYYY HH:mm"
               />
             </Grid>
 
-            <Grid size={{ xs: 12, sm: 4 }}>
+            <Grid size={{ xs: 12, sm: 6, md: 4 }}>
               <DateTimePicker
                 label="Data e Hora do Retorno"
                 value={formData.data_retorno}
                 onChange={(v) => handleDateChange('data_retorno', v)}
                 slotProps={{ textField: { fullWidth: true } }}
-                ampm={false} // 24h
+                ampm={false}
                 format="DD/MM/YYYY HH:mm"
               />
             </Grid>
 
-            <Grid size={{ xs: 12, sm: 4 }}>
+            <Grid size={{ xs: 12, sm: 12, md: 4 }}>
               <TextField
                 label="Número de diárias"
                 value={numeroDeDiarias > 0 ? numeroDeDiarias : ''}
@@ -498,19 +586,67 @@ useEffect(() => {
                 control={<Checkbox name="solicita_viagem_antecipada" checked={formData.solicita_viagem_antecipada} onChange={handleInputChange} />}
                 label="Solicita viagem antecipada?"
               />
-              {formData.solicita_viagem_antecipada && (
-                <Alert severity="warning" sx={{ mt: 1 }}>
-                  <b>Atenção:</b> ao selecionar esta opção, é obrigatório justificar (colocar em observações) o motivo do deslocamento antecipado, para que seja avaliada a possibilidade de concessão.
-Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia real de início do deslocamento, ou seja, neste caso um dia antes do compromisso.
+
+              {formData.solicita_viagem_antecipada ? (
+                <TextField
+                  name="justificativa_viagem_antecipada"
+                  label="Justificativa da viagem antecipada"
+                  value={formData.justificativa_viagem_antecipada}
+                  onChange={handleInputChange}
+                  multiline
+                  rows={3}
+                  required
+                  fullWidth
+                  sx={{ mt: 1 }}
+                  error={!!fieldErrors.justificativa_viagem_antecipada}
+                  helperText={
+                    fieldErrors.justificativa_viagem_antecipada
+                      ?? 'A DATA DE SAÍDA deve corresponder ao início real do deslocamento, ou seja, neste caso um dia antes do compromisso.'
+                  }
+                />
+              ) : (
+                <Alert severity="info" sx={{ mt: 1 }}>
+                   Se for necessário viajar um dia antes — por exemplo, quando o compromisso inicia de manhã em uma cidade distante — marque a opção acima e informe a justificativa.
                 </Alert>
               )}
+
+          <Grid size={{ xs: 12, sm: 6, md: 6 }} sx={{ mt: 3 }}>
+              <FormControl fullWidth required>
+                <InputLabel>Meio de Transporte</InputLabel>
+                <Select name="meio_transporte" value={formData.meio_transporte} label="Meio de Transporte" onChange={handleInputChange as any}>
+                  <MenuItem value="VEICULO_PROPRIO">Veículo Próprio</MenuItem>
+                  <MenuItem value="AEREO">Aéreo</MenuItem>
+                  <MenuItem value="ONIBUS">Transporte Rodoviário</MenuItem>
+                  <MenuItem value="CARONA">Carona (em veículo de outro servidor)</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+
+          <Grid size={{ xs: 12, sm: 6, md: 6 }} sx={{ mt: 3 }}>
+            <FormControl fullWidth>
+              <InputLabel>Tipo de Diária</InputLabel>
+              <Select
+                name="tipo_diaria"
+                value={formData.tipo_diaria}
+                onChange={handleInputChange as any}
+                label="Tipo de Diária"
+              >
+                {numeroDeDiarias !== 1 && <MenuItem value="COM_PERNOITE">Com Pernoite</MenuItem>}
+                <MenuItem value="SEM_PERNOITE">Sem Pernoite</MenuItem>
+                <MenuItem value="MEIA_DIARIA">Meia Diária</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+
+          
+
             </Grid>
 
             {/* Autocomplete de destino - agora retorna address components */}
             <Grid size={{ xs: 12, sm: 8 }}>
               <PlacesAutocomplete onSelect={handlePlaceSelect} />
               <Typography variant="caption" display="block">
-                A região (Local / Outras Capitais) será inferida automaticamente a partir do destino informado.
+                O Sistema deve identificar o endereço de destino, caso não aconteça infrome o administrador.
               </Typography>
             </Grid>
 
@@ -528,51 +664,40 @@ Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia re
               />
             </Grid>
 
-            <Grid size={{ xs: 12, sm: 6 }}>
-            <FormControl fullWidth required>
-                <InputLabel>Meio de Transporte</InputLabel>
-                <Select name="meio_transporte" value={formData.meio_transporte} label="Meio de Transporte" onChange={handleInputChange as any}>
-                <MenuItem value="VEICULO_PROPRIO">Veículo Próprio</MenuItem>
-                <MenuItem value="AEREO">Aéreo</MenuItem>
-                <MenuItem value="ONIBUS">Transporte Rodoviário</MenuItem>
-                <MenuItem value="CARONA">Carona (em veículo de outro servidor)</MenuItem>
-                </Select>
-            </FormControl>
-            </Grid>
-
-            {formData.meio_transporte === 'VEICULO_PROPRIO' && (
-              <Grid container spacing={2}>
-                <TextField name="placa_veiculo" label="Placa do carro" value={formData.placa_veiculo} onChange={handleInputChange} fullWidth />
-              </Grid>
-            )}
-
-            <Grid size={{ xs: 12, sm: 4 }}>
-                <FormControl fullWidth>
-                    <InputLabel>Tipo de Diária </InputLabel>
-                    <Select name="tipo_diaria" value={formData.tipo_diaria} onChange={handleInputChange as any} label="Tipo de Diária">
-                    {/* A opção "Com Pernoite" só é renderizada se a viagem tiver mais de 1 dia */}
-                    {numeroDeDiarias !== 1 && <MenuItem value="COM_PERNOITE">Com Pernoite</MenuItem>}
-                    <MenuItem value="SEM_PERNOITE">Sem Pernoite</MenuItem>
-                    <MenuItem value="MEIA_DIARIA">Meia Diária</MenuItem>
-                    </Select>
-                </FormControl>
-            </Grid>
-
             {/* Ponto móvel obrigatório — já fixo como SIM */}
             <Grid size={{ xs: 12, sm: 4 }}>
               <FormControlLabel control={<Checkbox checked={true} name="ponto_movel_obrigatorio" disabled />} label="Sistema do Ponto Móvel (Obrigatório) - SIM" />
             </Grid>
 
             {/* Solicitação de Pagamento de Inscrição */}
-            <Grid container spacing={2}>
-              <FormControlLabel control={<Checkbox name="solicita_pagamento_inscricao" checked={formData.solicita_pagamento_inscricao} onChange={handleInputChange} />} label="Solicita Pagamento de Inscrição no Curso?" />
-            </Grid>
-
-            {formData.solicita_pagamento_inscricao && (
-              <Grid container spacing={2}>
-                <TextField name="valor_taxa_inscricao" label="Valor da Taxa (R$)" value={formData.valor_taxa_inscricao} onChange={handleInputChange} type="number" fullWidth />
+            <Grid container spacing={2} alignItems="center">
+              <Grid size={{ xs: 12, sm: 8 }}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      name="solicita_pagamento_inscricao"
+                      checked={formData.solicita_pagamento_inscricao}
+                      onChange={handleInputChange}
+                    />
+                  }
+                  label="Solicita Pagamento de Inscrição no Curso?"
+                />
               </Grid>
-            )}
+
+              <Grid size={{ xs: 12, sm: 4 }}>
+                {formData.solicita_pagamento_inscricao && (
+                  <TextField
+                    name="valor_taxa_inscricao"
+                    label="Valor da Taxa (R$)"
+                    value={formatCurrencyInput(formData.valor_taxa_inscricao)}
+                    onChange={handleValorTaxaChange}
+                    inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
+                    fullWidth
+                    helperText=""
+                  />
+                )}
+              </Grid>
+            </Grid>
 
             {/* Se apenas 1 dia e tipo = COM_PERNOITE -> perguntar meia ou sem */}
             {numeroDeDiarias === 1 && formData.tipo_diaria === 'COM_PERNOITE' && (
@@ -588,11 +713,10 @@ Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia re
 
             {/* Anexos */}
             <Grid size={{ xs: 12 }}>
-              <Typography variant="subtitle1">Anexar Imagem / Folder (será enviado ao Google Drive)</Typography>
+              <Typography variant="subtitle1">Anexar Imagem / Folder ou outros documentos</Typography>
               <input type="file" accept="image/*,application/pdf" onChange={handleImageSelect} />
               {imagePreview && <Box component="img" src={imagePreview} alt="preview" sx={{ maxWidth: '100%', mt: 2 }} />}
-              <Button variant="outlined" sx={{ mt: 2 }} onClick={uploadFilesToDrive}>Enviar anexos para Google Drive</Button>
-              <Typography variant="caption" display="block">Pasta de destino: (defina no backend)</Typography>
+              <Typography variant="caption" display="block"></Typography>
             </Grid>
 
             <Grid size={{ xs: 12 }}>
@@ -680,6 +804,37 @@ Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia re
             <Grid size={{ xs: 12 }} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
               <Button variant="contained" color="primary" size="large">Enviar Solicitação</Button>
             </Grid>
+
+            {/* --- Seção adicionada: Informações sobre assinaturas (texto informativo) --- */}
+            <Grid size={{ xs: 12 }} sx={{ mt: 2 }}>
+            <Typography variant="h6">Informações:</Typography>
+
+
+              <Alert severity="info" sx={{ p: 2, mt: 1 }}>
+                <Typography variant="subtitle2"><b>ASSINATURA DIGITAL DO AGENTE SOLICITANTE</b></Typography>
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Todos os agentes políticos ou servidores devem necessariamente assinar a requisição de diária com o certificado digital no padrão ICP-Brasil, conforme e-mail da assinatura@camaraitapoa.sc.gov.br. Somente se considerará efetivada a requisição após a coleta de assinatura digital na requisição de diária.
+                </Typography>
+              </Alert>
+
+
+              <Alert severity="info" sx={{ p: 2, mt: 2 }}>
+                <Typography variant="subtitle2"><b>ASSINATURA DIGITAL DO PRESIDENTE</b></Typography>
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  O Presidente da Mesa Diretora, na qualidade de Ordenador de Despesas, deverá autorizar e assinar o presente requerimento, se atendidas as formalidades legais requeridas para a concessão de diárias no âmbito da Câmara Municipal de Itapoá, sem prejuízo da obrigatória prestação de contas pelo agente beneficiário no prazo de até 5 (cinco) dias úteis contados a partir do último dia do recebimento de diária.
+                </Typography>
+              </Alert>
+
+
+              <Alert severity="info" sx={{ p: 2, mt: 2 }}>
+                <Typography variant="subtitle2"><b>Observações:</b></Typography>
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                Documento deverá ser assinado digitalmente pelo agente requerente, em conformidade com o art. 45, §4º, da Lei Orgânica de Itapoá, Resolução nº 14/2016, Portaria 254/21 e conforme as regras da infraestrutura ICP-Brasil. Todas as informações incluídas neste formulário são de inteira responsabilidade do respectivo agente requerente que preencher as informações, inclusive os documentos anexados, e a autenticidade se dá a partir do vínculo do e-mail oficial do respectivo agente requerente, com observância do termo de uso do e-mail oficial. Após preencher o presente formulário e clicar no botão "Enviar", a Casa dará andamento no processo, analisará a documentação, desenvolverá os documentos conforme a Resolução nº 27/2025, e enviará para aprovação e assinatura digital do agente requerente e do ordenador de despesas.
+                </Typography>
+              </Alert>
+
+            </Grid>
+
           </Grid>
         </Box>
       </Paper>
@@ -688,3 +843,5 @@ Além disso, a <b>DATA DE SAÍDA</b> informada acima deve corresponder ao dia re
 };
 
 export default NovaDiaria;
+
+
