@@ -1,3 +1,5 @@
+// frontend/pages/NovaDiaria.tsx
+
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { PlacesAutocomplete } from '../components/PlacesAutocomplete';
@@ -12,6 +14,9 @@ import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { Dayjs } from 'dayjs';
 import apiClient from '../api/axiosConfig';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+dayjs.extend(utc);
 
 // --- Interfaces (mantive as suas) ---
 interface CalculoData {
@@ -105,6 +110,11 @@ export const NovaDiaria = () => {
   // novos estados locais
   const [capitalsList, setCapitalsList] = useState<string[]>([]);
   const [isLoadingConfig, setIsLoadingConfig] = useState(false);
+  // feriados carregados do backend (formato esperado: [{ id, data: 'YYYY-MM-DD', descricao }, ...])
+  const [feriados, setFeriados] = useState<string[]>([]);
+  const [prazoWarning, setPrazoWarning] = useState<string | null>(null);
+  const [isPrazoOk, setIsPrazoOk] = useState<boolean>(true);
+
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement> | any) => {
     const { name, value, type, checked } = event.target;
@@ -165,6 +175,119 @@ export const NovaDiaria = () => {
   const numeroDeDiarias = formData.data_saida && formData.data_retorno
     ? formData.data_retorno.diff(formData.data_saida, 'day') + 1
     : 0;
+
+  const isBusinessDay = (d: Dayjs) => {
+    const dow = d.day(); // 0 = domingo, 6 = sábado
+    if (dow === 0 || dow === 6) return false;
+      const formatted = d.format('YYYY-MM-DD');
+      return !feriados.includes(formatted);
+    };
+
+  /**
+   * Conta dias úteis de start (inclusive) até end (inclusive).
+   * Retorna inteiro >= 0.
+   */
+  const countBusinessDaysInclusive = (start: Dayjs, end: Dayjs) => {
+    if (!start || !end || end.isBefore(start, 'day')) return 0;
+    let cursor = start.startOf('day');
+    const last = end.startOf('day');
+    let cnt = 0;
+    while (cursor.isBefore(last) || cursor.isSame(last)) {
+      if (isBusinessDay(cursor)) cnt++;
+      cursor = cursor.add(1, 'day');
+    }
+    return cnt;
+  };
+
+  /**
+   * Calcula a data mínima permitida (primeira data >= start tal que
+   * countBusinessDaysInclusive(start, date) >= requiredDays)
+   */
+  const computeEarliestAllowedDate = (start: dayjs.Dayjs, requiredDays: number) => {
+    let cursor = start.startOf('day');
+    let tries = 0;
+    while (tries < 365) { // safe guard 1 ano
+      const cnt = countBusinessDaysInclusive(start, cursor);
+      if (cnt >= requiredDays) return cursor;
+      cursor = cursor.add(1, 'day');
+      tries++;
+    }
+    return null;
+  };
+
+  
+  useEffect(() => {
+    const loadFeriados = async () => {
+      try {
+        const res = await apiClient.get('/feriados/'); 
+        if (Array.isArray(res.data)) {
+          const normalized = res.data
+            .map((f: any) => {
+              // pode vir { data: '2025-06-17' } ou { data: '2025-06-17T00:00:00Z' }
+              return f && f.data ? dayjs(f.data).format('YYYY-MM-DD') : null;
+            })
+            // type guard: informa ao TS que estamos filtrando os nulls
+            .filter((d): d is string => d !== null && d !== undefined);
+
+          setFeriados(normalized);
+        }
+      } catch (err) {
+        console.warn('Falha ao carregar feriados (/feriados/):', err);
+        setFeriados([]);
+      }
+    };
+    loadFeriados();
+  }, []);
+
+  useEffect(() => {
+    // limpa se dados ausentes
+    if (!formData.data_saida) {
+      setPrazoWarning(null);
+      setIsPrazoOk(true);
+    } else {
+      // "data de solicitação" = agora
+      const now = dayjs();
+      // se antes das 14:00h, o dia atual conta; caso contrário, a contagem inicia no dia seguinte
+      const startCountingFrom = now.hour() < 14 ? now.startOf('day') : now.add(1, 'day').startOf('day');
+
+      // data de saída preenchida
+      const dataSaidaDay = formData.data_saida.startOf('day');
+
+      // determina número obrigatório de dias úteis
+      const requiredDays = formData.meio_transporte === 'AEREO' ? 10 : 3;
+
+      const businessDays = countBusinessDaysInclusive(startCountingFrom, dataSaidaDay);
+
+      if (businessDays < requiredDays) {
+        setIsPrazoOk(false);
+        const earliest = computeEarliestAllowedDate(startCountingFrom, requiredDays);
+        const earliestStr = earliest ? earliest.format('DD/MM/YYYY') : '---';
+        setPrazoWarning(
+          `RESOLUÇÃO Nº 27/2025 (Art.10): Exige ${requiredDays} dias úteis de antecedência. ` +
+          `Contagem iniciada em ${startCountingFrom.format('DD/MM/YYYY')} (hoje ${now.format('DD/MM/YYYY HH:mm')}). ` +
+          `Dias úteis encontrados até a saída: ${businessDays}. Data mínima permitida para saída: ${earliestStr}.`
+        );
+      } else {
+        setIsPrazoOk(true);
+        setPrazoWarning(null);
+      }
+    }
+
+    // validação óbvia: retorno não pode ser antes de saída
+    if (formData.data_saida && formData.data_retorno) {
+      if (formData.data_retorno.isBefore(formData.data_saida, 'minute')) {
+        setFieldErrors(prev => ({ ...prev, data_retorno: 'A data de retorno não pode ser anterior à data de saída.' }));
+      } else {
+        setFieldErrors(prev => {
+          const copy = { ...prev };
+          delete copy.data_retorno;
+          return copy;
+        });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.data_saida, formData.data_retorno, formData.meio_transporte, feriados]);
+
 
   // busca config (valor_upm e capitais) ao montar
   useEffect(() => {
@@ -580,6 +703,16 @@ useEffect(() => {
                 variant="filled"
               />
             </Grid>
+                {prazoWarning && (
+            <Alert severity="warning" sx={{ mt: 2, whiteSpace: 'pre-line' }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>Prazo de Antecedência - RESOLUÇÃO Nº 27/2025</Typography>
+              <Typography variant="body2" sx={{ mt: 1 }}>{prazoWarning}</Typography>
+              <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                (Art. 10) A requisição de diária será formalizada em sistema próprio, com pelo menos 3 dias úteis de antecedência. 
+                Para aquisição de passagens aéreas, antecedência mínima de 10 dias úteis. Consulte a Resolução completa no link.
+              </Typography>
+            </Alert>
+          )}
 
             <Grid size={{ xs: 12 }}>
               <FormControlLabel
@@ -802,7 +935,16 @@ useEffect(() => {
             <Grid size={{ xs: 12 }}><Divider sx={{ my: 2 }} /></Grid>
 
             <Grid size={{ xs: 12 }} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button variant="contained" color="primary" size="large">Enviar Solicitação</Button>
+              <Button
+                variant="contained"
+                color="primary"
+                size="large"
+                onClick={handleSubmit}
+                disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0}
+              >
+                Enviar Solicitação
+              </Button>
+
             </Grid>
 
             {/* --- Seção adicionada: Informações sobre assinaturas (texto informativo) --- */}
