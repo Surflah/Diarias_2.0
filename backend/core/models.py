@@ -115,6 +115,22 @@ class Processo(models.Model):
         default=Status.RASCUNHO
     )
 
+        # --- controle de numero/ano do processo (gerados pelo sistema)
+    ano = models.PositiveIntegerField(
+        "Ano do Processo",
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Ano em que a diária foi gerada (preenchido automaticamente)."
+    )
+    numero = models.PositiveIntegerField(
+        "Número Sequencial",
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Número sequencial do processo dentro do ano (gerado automaticamente)."
+    )
+
     # --- Informações da Viagem (Art. 5º da Resolução) ---
     objetivo_viagem = models.TextField("Objetivo da Viagem")
     destino = models.CharField("Cidade de Destino", max_length=255)
@@ -175,7 +191,10 @@ class Processo(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
+        if getattr(self, 'numero', None) and getattr(self, 'ano', None):
+            return f"Processo #{self.numero}-{self.ano} - {self.solicitante.get_full_name()}"
         return f"Processo #{self.id} - {self.solicitante.get_full_name()}"
+
 
 
 class ProcessoHistorico(models.Model):
