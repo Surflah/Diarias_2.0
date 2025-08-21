@@ -31,3 +31,4 @@ Thumbs.db
 /staticfiles/
 
 credentials.json
+credentials_service_account.json

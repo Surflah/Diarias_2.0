@@ -1,14 +1,18 @@
 // frontend/pages/NovaDiaria.tsx
-
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { PlacesAutocomplete } from '../components/PlacesAutocomplete';
 import {
   Box, Paper, Typography, TextField, Button, FormControl, InputLabel,
   Select, MenuItem, Checkbox, FormControlLabel, Grid, Alert,
   TableContainer, Table, TableHead, TableRow, TableCell, TableBody, Divider,
-  RadioGroup, FormLabel, Radio, Link,
+  RadioGroup, FormLabel, Radio, Link, IconButton, List, ListItem, ListItemText,
+  Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
+import CircularProgress from '@mui/material/CircularProgress';
+import { useNavigate } from 'react-router-dom';
+
+import DeleteIcon from '@mui/icons-material/Delete';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
@@ -115,6 +119,17 @@ export const NovaDiaria = () => {
   const [prazoWarning, setPrazoWarning] = useState<string | null>(null);
   const [isPrazoOk, setIsPrazoOk] = useState<boolean>(true);
 
+  // estados de envio
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitResult, setSubmitResult] = useState<{ docUrl?: string; folderUrl?: string; numero?: number; ano?: number } | null>(null);
+
+  const navigate = useNavigate();
+  const autoCloseTimer = useRef<number | null>(null);
+
+  // estado para controlar o diálogo de sucesso
+  const [successDialogOpen, setSuccessDialogOpen] = useState(false);
+
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement> | any) => {
     const { name, value, type, checked } = event.target;
@@ -128,7 +143,9 @@ export const NovaDiaria = () => {
     }));
   };
 
-   const handleSubmit = async () => {
+  const handleSubmit = async () => {
+    setSubmitError(null);
+
     const errors: Record<string, string> = {};
     if (formData.solicita_viagem_antecipada) {
       if (!formData.justificativa_viagem_antecipada || formData.justificativa_viagem_antecipada.trim() === '') {
@@ -136,20 +153,113 @@ export const NovaDiaria = () => {
       }
     }
 
+    // valida datas mínimas e retorno >= saida
+    if (!formData.data_saida) errors['data_saida'] = 'Informe a data de saída.';
+    if (!formData.data_retorno) errors['data_retorno'] = 'Informe a data de retorno.';
+    if (formData.data_saida && formData.data_retorno && formData.data_retorno.isBefore(formData.data_saida)) {
+      errors['data_retorno'] = 'A data de retorno não pode ser anterior à data de saída.';
+    }
+
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) {
-      // scroll to the field for better UX
       const el = document.getElementsByName('justificativa_viagem_antecipada')[0] as HTMLElement | undefined;
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
 
-    // TODO: integrar com o envio real para o backend
-    // Exemplo: montar payload e chamar apiClient.post('/processos/solicitar/', payload)
-    // Por enquanto apenas console log para verificar
-    console.debug('Form ready to submit, payload:', formData);
-    // substituir pelo envio real quando integrar
+    // bloquear UI
+    setIsSubmitting(true);
+
+
+    try {
+      // montar payload do processo com os campos relevantes
+      const processoPayload: any = {
+        destino: formData.destino,
+        data_saida: formData.data_saida ? formData.data_saida.toISOString() : null,
+        data_retorno: formData.data_retorno ? formData.data_retorno.toISOString() : null,
+        meio_transporte: formData.meio_transporte || null,
+        placa_veiculo: formData.placa_veiculo || null,
+        solicita_viagem_antecipada: formData.solicita_viagem_antecipada || false,
+        justificativa_viagem_antecipada: formData.justificativa_viagem_antecipada || '',
+        objetivo_viagem: formData.finalidade_viagem || '',
+        solicita_pagamento_inscricao: formData.solicita_pagamento_inscricao || false,
+        valor_taxa_inscricao: Number(formData.valor_taxa_inscricao || 0),
+        observacoes: formData.observacoes || '',
+        // campos calculados / internos — útil para o backend
+        regiao_diaria: formData.regiao_diaria,
+        tipo_diaria: formData.tipo_diaria,
+        num_com_pernoite: formData.num_com_pernoite,
+        num_sem_pernoite: formData.num_sem_pernoite,
+        num_meia_diaria: formData.num_meia_diaria,
+      };
+
+      const form = new FormData();
+      form.append('processo', JSON.stringify(processoPayload));
+
+      // anexar arquivos
+      attachedFiles.forEach((f) => {
+        form.append('files', f, f.name);
+      });
+
+      // POST para o endpoint que criamos
+      const resp = await apiClient.post('/processos/submit/', form, {
+        // Important: do not set Content-Type header; axios/ browser will set multipart boundary automatically
+        headers: {
+          // Se o apiClient já envia Authorization via interceptor, tudo certo.
+        }
+      });
+
+      // sucesso
+      const data = resp.data;
+      setSubmitResult({
+        docUrl: data.gdrive_doc_url,
+        folderUrl: data.gdrive_folder_url,
+        numero: data.numero,
+        ano: data.ano,
+      });
+
+      // mostra diálogo de sucesso
+      setSuccessDialogOpen(true);
+
+      // inicia auto-redirect após X ms (ex.: 4000 ms = 4s)
+      if (autoCloseTimer.current) {
+        window.clearTimeout(autoCloseTimer.current);
+      }
+      autoCloseTimer.current = window.setTimeout(() => {
+        // navega automaticamente ao dashboard
+        setSuccessDialogOpen(false);
+        // altere '/dashboard' se sua rota for diferente
+        navigate('/dashboard');
+      }, 4000);
+
+      // opcional: limpar anexos/preview
+      setAttachedFiles([]);
+      setImagePreview(null);
+
+    } catch (err: any) {
+      console.error('Erro ao submeter processo:', err);
+      const message =
+        err?.response?.data?.error ||
+        (err?.response?.data ? JSON.stringify(err.response.data) : err?.message) ||
+        'Erro ao enviar solicitação.';
+      setSubmitError(String(message));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const handleSuccessClose = (navigateToDashboard = false) => {
+      // limpa timer se existir
+      if (autoCloseTimer.current) {
+        window.clearTimeout(autoCloseTimer.current);
+        autoCloseTimer.current = null;
+      }
+      setSuccessDialogOpen(false);
+      if (navigateToDashboard) {
+        navigate('/dashboard'); // ajuste se necessário
+      }
+      // nota: mantemos submitResult para evitar reenvio acidental
+    };
 
   const currencyFormatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -489,9 +599,6 @@ export const NovaDiaria = () => {
   }, [numeroDeDiarias, formData.tipo_diaria]);
 
   // cálculos monetários + deslocamento (usando UPM_TABLE + distancia vindo de calculoData)
-  // cálculos monetários + deslocamento (usando UPM_TABLE + distancia vindo de calculoData)
-// Substituir o useEffect antigo por este bloco
-// cálculos monetários + deslocamento (usando UPM_TABLE + distancia vindo de calculoData)
 useEffect(() => {
     // Prioridade: usar valores que já vieram do backend (calculoData), mas permitir overrides vindos do frontend (formData.num_*)
     const valorUpm = Number((calculoData?.calculo_diarias?.valor_upm_usado ?? formData.valor_upm) || 0);
@@ -564,17 +671,26 @@ useEffect(() => {
 
   // preview image / files (mantive seu código)
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files && e.target.files[0];
-    if (!f) return;
-    setAttachedFiles(prev => [...prev, f]);
-    const reader = new FileReader();
-    reader.onload = () => setImagePreview(String(reader.result));
-    reader.readAsDataURL(f);
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    // permitir múltiplos
+    const arr = Array.from(files);
+    setAttachedFiles(prev => [...prev, ...arr]);
+    // apenas preview do primeiro arquivo se imagem
+    const f = arr[0];
+    if (f && f.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = () => setImagePreview(String(reader.result));
+      reader.readAsDataURL(f);
+    } else {
+      setImagePreview(null);
+    }
+    // limpar input para poder selecionar o mesmo arquivo depois se necessário
+    (e.target as HTMLInputElement).value = '';
   };
 
-  const uploadFilesToDrive = async () => {
-    if (attachedFiles.length === 0) return;
-    alert('O upload para o Google Drive precisa de um endpoint backend. Configure service account.');
+  const removeAttachedFile = (idx: number) => {
+    setAttachedFiles(prev => prev.filter((_, i) => i !== idx));
   };
 
   // Aux: para o caso de 1 dia, o usuário deve escolher entre meia ou sem pernoite
@@ -847,9 +963,29 @@ useEffect(() => {
             {/* Anexos */}
             <Grid size={{ xs: 12 }}>
               <Typography variant="subtitle1">Anexar Imagem / Folder ou outros documentos</Typography>
-              <input type="file" accept="image/*,application/pdf" onChange={handleImageSelect} />
+              <input type="file" accept="image/*,application/pdf" onChange={handleImageSelect} multiple />
               {imagePreview && <Box component="img" src={imagePreview} alt="preview" sx={{ maxWidth: '100%', mt: 2 }} />}
-              <Typography variant="caption" display="block"></Typography>
+              <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                Anexos serão enviados diretamente ao Google Drive na criação do processo.
+              </Typography>
+
+              {/* Lista de anexos */}
+              {attachedFiles.length > 0 && (
+                <List dense>
+                  {attachedFiles.map((f, idx) => (
+                    <ListItem
+                      key={`${f.name}-${idx}`}
+                      secondaryAction={
+                        <IconButton edge="end" aria-label="delete" onClick={() => removeAttachedFile(idx)}>
+                          <DeleteIcon />
+                        </IconButton>
+                      }
+                    >
+                      <ListItemText primary={f.name} secondary={`${(f.size/1024).toFixed(1)} KB`} />
+                    </ListItem>
+                  ))}
+                </List>
+              )}
             </Grid>
 
             <Grid size={{ xs: 12 }}>
@@ -934,17 +1070,81 @@ useEffect(() => {
 
             <Grid size={{ xs: 12 }}><Divider sx={{ my: 2 }} /></Grid>
 
+            {/* Mensagens de sucesso / erro do envio */}
+            {submitError && <Grid size={{ xs: 12 }}><Alert severity="error">{submitError}</Alert></Grid>}
+            {submitResult && (
+              <Grid size={{ xs: 12 }}>
+                <Alert severity="success">
+                  Solicitação criada com sucesso — Processo Nº {submitResult.numero}-{submitResult.ano}.
+                  {submitResult.docUrl && (
+                    <>
+                      {' '}
+                      Documento: <Link href={submitResult.docUrl} target="_blank" rel="noopener">{submitResult.docUrl}</Link>
+                    </>
+                  )}
+                  {submitResult.folderUrl && (
+                    <>
+                      {' '} Pasta: <Link href={submitResult.folderUrl} target="_blank" rel="noopener">{submitResult.folderUrl}</Link>
+                    </>
+                  )}
+                </Alert>
+              </Grid>
+            )}
+
+            {/* --- Diálogo de sucesso (overlay) --- */}
+            <Dialog
+              open={successDialogOpen}
+              onClose={() => handleSuccessClose(false)}
+              aria-labelledby="success-dialog-title"
+              disableEscapeKeyDown
+              fullWidth
+              maxWidth="sm"
+            >
+              <DialogTitle id="success-dialog-title">Solicitação enviada com sucesso</DialogTitle>
+              <DialogContent dividers>
+                <Typography variant="body1" gutterBottom>
+                  Solicitação criada com sucesso — Processo Nº {submitResult?.numero}-{submitResult?.ano}.
+                </Typography>
+                {submitResult?.docUrl && (
+                  <Typography variant="body2" sx={{ mt: 1 }}>
+                    Documento: <Link href={submitResult.docUrl} target="_blank" rel="noopener">{submitResult.docUrl}</Link>
+                  </Typography>
+                )}
+                {submitResult?.folderUrl && (
+                  <Typography variant="body2" sx={{ mt: 1 }}>
+                    Pasta: <Link href={submitResult.folderUrl} target="_blank" rel="noopener">{submitResult.folderUrl}</Link>
+                  </Typography>
+                )}
+
+                <Typography variant="caption" display="block" sx={{ mt: 2 }}>
+                  Esta mensagem será fechada automaticamente e você será redirecionado ao Painel em alguns segundos.
+                </Typography>
+              </DialogContent>
+
+              <DialogActions>
+                <Button onClick={() => handleSuccessClose(true)} color="primary" variant="contained">
+                  Ir para o Dashboard
+                </Button>
+                <Button onClick={() => handleSuccessClose(false)} color="secondary" variant="outlined">
+                  Fechar
+                </Button>
+              </DialogActions>
+            </Dialog>
+
             <Grid size={{ xs: 12 }} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
               <Button
                 variant="contained"
                 color="primary"
                 size="large"
                 onClick={handleSubmit}
-                disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0}
+                disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0 || isSubmitting || !!submitResult || successDialogOpen}
+                aria-busy={isSubmitting}
+                aria-live="polite"
+                startIcon={isSubmitting ? <CircularProgress size={18} /> : undefined}
+                aria-label={isSubmitting ? 'Enviando solicitação' : 'Enviar solicitação'}
               >
-                Enviar Solicitação
+                {isSubmitting ? 'Enviando...' : 'Enviar Solicitação'}
               </Button>
-
             </Grid>
 
             {/* --- Seção adicionada: Informações sobre assinaturas (texto informativo) --- */}
@@ -985,5 +1185,3 @@ useEffect(() => {
 };
 
 export default NovaDiaria;
-
-

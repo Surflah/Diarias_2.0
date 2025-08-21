@@ -1,0 +1,20 @@
+Olá {{ processo.solicitante.get_full_name }},
+
+Sua solicitação de Diária foi criada com sucesso.
+
+Detalhes:
+- Processo: #{{ numero }}-{{ ano }}
+- ID: {{ processo.id }}
+- Valor estimado para empenho: {% if processo.valor_total_empenhar %}R$ {{ processo.valor_total_empenhar }}{% else %}N/D{% endif %}
+
+Você pode acompanhar o processo e encontrará os documentos em:
+- Documento principal (Google Docs): {{ link_doc }}
+- Pasta do processo no Drive: {{ link_folder }}
+
+Próximos passos:
+- O processo está agora em "Aguardando Análise Administrativa". A equipe de Controle Interno será notificada para análise.
+
+Se tiver dúvidas, responda este e-mail.
+
+Atenciosamente,
+Equipe responsável pelas Diárias

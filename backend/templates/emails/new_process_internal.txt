@@ -1,0 +1,18 @@
+Olá equipe de Controle Interno,
+
+Uma nova solicitação de Diária foi criada e está aguardando análise administrativa.
+
+Detalhes:
+- Processo: #{{ numero }}-{{ ano }}
+- Solicitante: {{ processo.solicitante.get_full_name }}
+- ID do processo: {{ processo.id }}
+- Valor total para empenho: {% if processo.valor_total_empenhar %}R$ {{ processo.valor_total_empenhar }}{% else %}N/D{% endif %}
+
+Acesse o documento no Google Docs: {{ link_doc }}
+Acesse a pasta no Drive: {{ link_folder }}
+
+Ações possíveis:
+- Compilar Documentos / Analisar / Devolver para ajuste.
+
+Atenciosamente,
+Sistema de Diárias

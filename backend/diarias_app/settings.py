@@ -271,3 +271,9 @@ USE_TZ = True
 
 
 GOOGLE_MAPS_API_KEY = config('GOOGLE_MAPS_API_KEY', default=None)
+
+# Google / Drive config
+GDRIVE_ROOT_FOLDER_ID = "1cOXSA28NevKucaWioGQMoX0ZrdVLsQvS"
+GDOC_TEMPLATE_ID = "1IE-pqTl_Syu66gMrnbGrIxlGTfW2e1bTgPkpWLWCI_M"
+# path absoluto para chave da service account (JSON)
+GOOGLE_SERVICE_ACCOUNT_FILE = os.path.join(BASE_DIR, 'credentials_service_account.json')
