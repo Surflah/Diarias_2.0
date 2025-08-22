@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Box, Drawer, AppBar, Toolbar, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Typography, CssBaseline } from '@mui/material';
+import { Box, Drawer, AppBar, Toolbar, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Typography, CssBaseline, Avatar, Button } from '@mui/material';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import AddCardIcon from '@mui/icons-material/AddCard';
 import { useAuth } from '../context/AuthContext';
@@ -17,7 +17,7 @@ const menuItems = [
 export const AppLayout = ({ children }: { children: React.ReactNode }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, activeRole } = useAuth();
 
   return (
     <Box sx={{ display: 'flex' }}>
@@ -47,9 +47,18 @@ export const AppLayout = ({ children }: { children: React.ReactNode }) => {
         <Toolbar>
             <Typography variant="h6" sx={{ fontWeight: 'bold' }}>Diárias App</Typography>
         </Toolbar>
-        <Box sx={{ p: 2, borderTop: 1, borderBottom: 1, borderColor: 'divider' }}>
+        <Box sx={{ p: 2, borderTop: 1, borderBottom: 1, borderColor: 'divider', textAlign: 'center' }}>
+            <Avatar src={user?.picture || undefined} sx={{ width: 64, height: 64, mx: 'auto', mb: 1 }} />
             <Typography variant="subtitle1" fontWeight="bold">{user?.first_name} {user?.last_name}</Typography>
             <Typography variant="body2" color="text.secondary">{user?.email}</Typography>
+             {activeRole && (
+              <Typography variant="body2" sx={{ mt: 1, fontWeight: 'bold' }}>
+                Perfil: {activeRole}
+              </Typography>
+            )}
+            <Button size="small" sx={{ mt: 1 }} onClick={() => navigate('/select-role')}>
+              Trocar Perfil
+            </Button>
         </Box>
         <List>
           {menuItems.map((item) => (

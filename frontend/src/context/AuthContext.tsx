@@ -11,7 +11,8 @@ interface UserProfile {
   cpf: string | null;
   cargo: string | null;
   lotacao: string | null;
-  roles: string[]; 
+  roles: string[];
+  picture?: string | null;
 }
 
 interface AuthContextType {
@@ -57,6 +58,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (token) {
         try {
           const { data: profile } = await apiClient.get<UserProfile>('/profile/me/');
+          console.debug('Profile recebido:', profile); 
           setUser(profile);
 
           // PRIORIDADE 1: Perfil incompleto?
@@ -96,6 +98,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
               navigate('/select-role');
             }
           }
+          
         } catch (error) {
           console.error("Token inválido ou falha ao buscar perfil. Deslogando.", error);
           logout();

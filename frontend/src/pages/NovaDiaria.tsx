@@ -7,7 +7,7 @@ import {
   Select, MenuItem, Checkbox, FormControlLabel, Grid, Alert,
   TableContainer, Table, TableHead, TableRow, TableCell, TableBody, Divider,
   RadioGroup, FormLabel, Radio, Link, IconButton, List, ListItem, ListItemText,
-  Dialog, DialogTitle, DialogContent, DialogActions
+  Dialog, DialogTitle, DialogContent, DialogActions, Backdrop
 } from '@mui/material';
 import CircularProgress from '@mui/material/CircularProgress';
 import { useNavigate } from 'react-router-dom';
@@ -716,6 +716,12 @@ useEffect(() => {
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
+       <Backdrop
+        open={isSubmitting}
+        sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.modal + 1, backdropFilter: 'blur(4px)' }}
+      >
+        <CircularProgress color="inherit" />
+      </Backdrop>
       <Paper sx={{ p: 3, maxWidth: 900, margin: 'auto' }}>
         <Typography variant="h5" component="h1" gutterBottom>Solicitação de Nova Diária</Typography>
         <Alert severity="info" sx={{ mt: 1, mb: 2 }}>
@@ -859,8 +865,11 @@ useEffect(() => {
                   sx={{ mt: 1 }}
                   error={!!fieldErrors.justificativa_viagem_antecipada}
                   helperText={
-                    fieldErrors.justificativa_viagem_antecipada
-                      ?? 'A DATA DE SAÍDA deve corresponder ao início real do deslocamento, ou seja, neste caso um dia antes do compromisso.'
+                    fieldErrors.justificativa_viagem_antecipada ?? (
+                      <Typography sx={{ color: 'error.main', fontWeight: 'bold' }}>
+                        A DATA DE SAÍDA deve corresponder ao início real do deslocamento, ou seja, neste caso um dia antes do compromisso.
+                      </Typography>
+                    )
                   }
                 />
               ) : (
@@ -986,7 +995,7 @@ useEffect(() => {
 
             {/* Anexos */}
             <Grid size={{ xs: 12 }}>
-              <Typography variant="subtitle1">Anexar Imagem / Folder ou outros documentos</Typography>
+              <Typography variant="subtitle1" sx={{ color: 'error.main' }}>Anexar Imagem / Folder ou outros documentos</Typography>
               <input type="file" accept="image/*,application/pdf" onChange={handleImageSelect} multiple />
               {imagePreview && <Box component="img" src={imagePreview} alt="preview" sx={{ maxWidth: '100%', mt: 2 }} />}
               <Typography variant="caption" display="block" sx={{ mt: 1 }}>

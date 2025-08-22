@@ -17,8 +17,8 @@ from rest_framework.decorators import action
 from decimal import Decimal, ROUND_HALF_UP
 
 
-from core.models import Processo, ParametrosSistema, Feriado, Profile
-from core.services import calculos_service
+from core.models import Processo, ParametrosSistema, Feriado, Documento, Profile
+from core.services import calculos_service, google_drive_service, google_docs_service
 from .serializers import ProcessoSerializer, ParametrosSistemaSerializer, FeriadoSerializer, ProfileSerializer, CalculoPreviewSerializer
 
 from core.services.orquestrador_gdrive import create_process_folder_and_doc
@@ -27,30 +27,13 @@ from num2words import num2words
 
 import json
 import math
-# `babel` é utilizado apenas para formatar datas em português. Como esse
-# pacote pode não estar disponível em todos os ambientes (por exemplo, nos
-# testes automatizados), tentamos importá-lo de forma opcional e provemos um
-# fallback simples caso a importação falhe.
-try:  # pragma: no cover - comportamento dependente de ambiente
-    from babel.dates import format_date as babel_format_date
+# babel é usado apenas para formatações mais sofisticadas de datas. Se não estiver
+# disponível, caímos para uma formatação simples pt-BR.
+try:  # pragma: no cover - fallback para ambientes sem Babel
+    from babel.dates import format_date
 except ModuleNotFoundError:  # pragma: no cover
-    babel_format_date = None
-
-
-def format_date(value, format="d 'de' MMMM 'de' yyyy", locale="pt_BR"):
-    """Formata a data em português.
-
-    Se `babel` não estiver instalado, realiza uma formatação manual.
-    """
-    if babel_format_date:
-        return babel_format_date(value, format=format, locale=locale)
-
-    # Fallback manual com nomes de meses em português
-    months = [
-        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
-        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
-    ]
-    return f"{value.day:02d} de {months[value.month-1]} de {value.year}"
+    def format_date(date_obj, format="d 'de' MMMM 'de' yyyy", locale="pt_BR"):
+        return date_obj.strftime("%d/%m/%Y")
 
 
 from core.services.calculos_service import calcular_valor_diarias, calcular_valor_deslocamento, CalculoServiceError
@@ -97,23 +80,63 @@ class GoogleAuthView(APIView):
             return Response({"error": token_data}, status=status.HTTP_400_BAD_REQUEST)
 
         id_token = token_data.get("id_token")
+        access_token = token_data.get("access_token")
         if not id_token:
             return Response({"error": "No id_token from Google"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. Valida o token com Google
-        info_res = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}")
-        user_info = info_res.json()
-
+        # Tenta obter dados completos (inclui picture) via userinfo
+        user_info = {}
+        if access_token:
+            ui = requests.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            if ui.ok:
+                user_info = ui.json()
+        if not user_info:
+            # fallback no tokeninfo (pode não ter picture)
+            info_res = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}")
+            user_info = info_res.json()
+        logger.info("GoogleAuth: email=%s given_name=%s family_name=%s picture_len=%s",
+            user_info.get("email"),
+            user_info.get("given_name"),
+            user_info.get("family_name"),
+            len(user_info.get("picture") or "") )
+        
         email = user_info.get("email")
         if not email:
             return Response({"error": "Invalid token info"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 3. Cria ou pega usuário
+        # 3. Cria ou pega usuário e atualiza nomes quando vierem do Google
+        given_name = user_info.get("given_name") or ""
+        family_name = user_info.get("family_name") or ""
+        picture = user_info.get("picture") or None
+
         user, created = User.objects.get_or_create(
             email=email,
-            defaults={"username": email, "first_name": user_info.get("given_name", "")}
+            defaults={"username": email, "first_name": given_name, "last_name": family_name}
         )
+        changed = False
+        if given_name and user.first_name != given_name:
+            user.first_name = given_name
+            changed = True
+        if family_name and user.last_name != family_name:
+            user.last_name = family_name
+            changed = True
+        if changed:
+            user.save(update_fields=["first_name", "last_name"])
 
+        # 3.1 garante Profile e salva URL da foto
+        from core.models import Profile
+        profile, _ = Profile.objects.get_or_create(user=user)
+        if picture and profile.picture_url != picture:
+            profile.picture_url = picture
+            profile.save(update_fields=["picture_url"])
+
+        
+        logger.info("GoogleAuth: profile saved user_id=%s picture_url=%s",
+            user.id, profile.picture_url)
         # 4. Gera JWT
         refresh = RefreshToken.for_user(user)
         return Response({
@@ -249,80 +272,121 @@ class ProcessoViewSet(viewsets.ModelViewSet):
             logger.exception("Falha ao criar processo no banco de dados: %s", e)
             return Response({"error": "Erro interno ao salvar o processo."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # 3. Preparar dados para criação no Google Drive
-        attachments = request.FILES.getlist('files')
-        local_created_at = timezone.localtime(processo_instance.created_at)
-
-        delta_dias = processo_instance.data_retorno - processo_instance.data_saida
-        numero_dias = math.ceil(delta_dias.total_seconds() / 86400)
-        periodo_viagem_str = f"{int(numero_dias)} dia(s)"
-
-        diarias_data = calculos_frontend.get('calculo_diarias', {})
-        deslocamento_data = calculos_frontend.get('calculo_deslocamento', {})
-
-        replacements = {
-            'Numero': f"{processo_instance.numero}-{processo_instance.ano}",
-            'Nome': processo_instance.solicitante.get_full_name(),
-            'CPF': processo_instance.solicitante.profile.cpf or '',
-            'Cargo': processo_instance.solicitante.profile.cargo or '',
-            'Local_Destino': processo_instance.destino,
-            'Hora_Partida': timezone.localtime(processo_instance.data_saida).strftime('%d/%m/%Y %H:%M'),
-            'Hora_Retorno': timezone.localtime(processo_instance.data_retorno).strftime('%d/%m/%Y %H:%M'),
-            'Transporte': processo_instance.get_meio_transporte_display(),
-            'placa': processo_instance.placa_veiculo or 'Não aplicável',
-            'solicitadoEm': local_created_at.strftime('%d/%m/%Y %H:%M'),
-            'Periodo_Viagem': periodo_viagem_str,
-            'numCom': diarias_data.get('num_com_pernoite', 0),
-            'upmCom': diarias_data.get('upm_com_pernoite', 0),
-            'vlrUPM': f"R$ {diarias_data.get('valor_upm_usado', 0):.2f}".replace('.',','),
-            'totalCom': f"R$ {diarias_data.get('total_com_pernoite', 0):.2f}".replace('.',','),
-            'numSem': diarias_data.get('num_sem_pernoite', 0),
-            'upmSem': diarias_data.get('upm_sem_pernoite', 0),
-            'totalSem': f"R$ {diarias_data.get('total_sem_pernoite', 0):.2f}".replace('.',','),
-            'numMeia': diarias_data.get('num_meia_diaria', 0),
-            'upmMeia': diarias_data.get('upm_meia_diaria', 0),
-            'totalMeia': f"R$ {diarias_data.get('total_meia_diaria', 0):.2f}".replace('.',','),
-            'totalDiarias': f"R$ {diarias_data.get('valor_total_diarias', 0):.2f}".replace('.',','),
-            'kmTotal': deslocamento_data.get('distancia_km', 0),
-            'precoGas': f"R$ {deslocamento_data.get('preco_gas_usado', 0):.2f}".replace('.',','),
-            'vlrDeslocamento': f"R$ {deslocamento_data.get('valor_deslocamento', 0):.2f}".replace('.',','),
-            'totEmpenhar': f"R$ {calculos_frontend.get('total_empenhar', 0):.2f}".replace('.',','),
-            'Total_Empenhar': f"R$ {calculos_frontend.get('total_empenhar', 0):.2f}".replace('.',','),
-            'Vlr_Total_Extenso': valor_extenso_sem_centavos_if_round(calculos_frontend.get('total_empenhar', 0)),
-            'Finalidade': processo_instance.objetivo_viagem,
-            'constaAnexo': 'Sim' if attachments else 'Não',
-            'ponto': 'SIM',
-            'Pagamento_Curso': 'Sim' if processo_instance.solicita_pagamento_inscricao else 'Não',
-            'justificaViagemAntecipada': processo_instance.justificativa_viagem_antecipada or 'Não se aplica.',
-            'extrair_data': format_date(local_created_at.date(), format="d 'de' MMMM 'de' yyyy", locale='pt_BR'),
-        }
-
+        # 3. Orquestração com o Google Drive
         try:
-            controle_emails = getattr(settings, 'CONTROLE_INTERNO_EMAILS', [])
-            if isinstance(controle_emails, str):
-                controle_emails = [e.strip() for e in controle_emails.split(',') if e.strip()]
-
-            orq_res = create_process_folder_and_doc(
-                processo=processo_instance,
-                replacements=replacements,
-                attachments=attachments,
-                root_drive_id=settings.GDRIVE_ROOT_FOLDER_ID,
-                template_id=settings.GDOC_TEMPLATE_ID,
-                controle_interno_emails=controle_emails,
-                requester_email=request.user.email,
-            )
-
-            processo_instance.gdrive_folder_id = orq_res.get('process_folder_id')
+            # Cria a estrutura de pastas
+            root_folder_id = settings.GDRIVE_ROOT_FOLDER_ID
+            ano_folder = google_drive_service.ensure_folder(root_folder_id, str(processo_instance.ano))
+            processo_folder_name = f"Diária {processo_instance.numero}-{processo_instance.ano} - {processo_instance.solicitante.get_full_name()}"
+            processo_folder = google_drive_service.ensure_folder(ano_folder['id'], processo_folder_name)
+            docs_folder = google_drive_service.ensure_folder(processo_folder['id'], "1 - Documentos recebidos na requisição")
+            
+            # Salva o ID da pasta principal no processo
+            processo_instance.gdrive_folder_id = processo_folder['id']
             processo_instance.save(update_fields=['gdrive_folder_id'])
+
+            # 4. Faz o upload dos arquivos anexados
+            attachments = request.FILES.getlist('files')
+            for f in attachments:
+                uploaded_file = google_drive_service.upload_file(docs_folder['id'], f.name, f, f.content_type)
+                Documento.objects.create(
+                    processo=processo_instance,
+                    nome_arquivo=f.name,
+                    gdrive_file_id=uploaded_file['id'],
+                    gdrive_file_url=uploaded_file.get('webViewLink'),
+                    tipo_documento=Documento.TipoDocumento.OUTRO,
+                    uploaded_by=request.user
+                )
+
+            # 5. Prepara os dados para o template do Google Docs
+            local_created_at = timezone.localtime(processo_instance.created_at)
+            
+            # Cálculo correto do período da viagem
+            delta_dias = processo_instance.data_retorno - processo_instance.data_saida
+            numero_dias = math.ceil(delta_dias.total_seconds() / 86400)
+            periodo_viagem_str = f"{int(numero_dias)} dia(s)"
+
+            diarias_data = calculos_frontend.get('calculo_diarias', {})
+            deslocamento_data = calculos_frontend.get('calculo_deslocamento', {})
+
+            # Dicionário de substituição de tags CORRIGIDO
+            replacements = {
+                'Numero': f"{processo_instance.numero}-{processo_instance.ano}",
+                'Nome': processo_instance.solicitante.get_full_name(),
+                'CPF': processo_instance.solicitante.profile.cpf or '',
+                'Cargo': processo_instance.solicitante.profile.cargo or '',
+                'Local_Destino': processo_instance.destino,
+                'Hora_Partida': timezone.localtime(processo_instance.data_saida).strftime('%d/%m/%Y %H:%M'),
+                'Hora_Retorno': timezone.localtime(processo_instance.data_retorno).strftime('%d/%m/%Y %H:%M'),
+                'Transporte': processo_instance.get_meio_transporte_display(),
+                'placa': f"Placa: {processo_instance.placa_veiculo}" if processo_instance.placa_veiculo else '-----',
+                'solicitadoEm': local_created_at.strftime('%d/%m/%Y %H:%M'),
+                'Periodo_Viagem': periodo_viagem_str,
+
+                'numCom': format_tag_value(diarias_data.get('num_com_pernoite', 0)),
+                'upmCom': format_tag_value(diarias_data.get('upm_com_pernoite', 0)),
+                'vlrUPM': format_tag_value(diarias_data.get('valor_upm_usado', 0), is_currency=True),
+                'totalCom': format_tag_value(diarias_data.get('total_com_pernoite', 0), is_currency=True),
+                'numSem': format_tag_value(diarias_data.get('num_sem_pernoite', 0)),
+                'upmSem': format_tag_value(diarias_data.get('upm_sem_pernoite', 0)),
+                'totalSem': format_tag_value(diarias_data.get('total_sem_pernoite', 0), is_currency=True),
+                'numMeia': format_tag_value(diarias_data.get('num_meia_diaria', 0)),
+                'upmMeia': format_tag_value(diarias_data.get('upm_meia_diaria', 0)),
+                'totalMeia': format_tag_value(diarias_data.get('total_meia_diaria', 0), is_currency=True),
+                'totalDiarias': format_tag_value(diarias_data.get('valor_total_diarias', 0), is_currency=True),
+
+                'kmTotal': format_tag_value(deslocamento_data.get('distancia_km', 0)),
+                'precoGas': format_tag_value(deslocamento_data.get('preco_gas_usado', 0), is_currency=True),
+                'vlrDeslocamento': format_tag_value(deslocamento_data.get('valor_deslocamento', 0), is_currency=True),
+
+                'totEmpenhar': format_tag_value(calculos_frontend.get('total_empenhar', 0), is_currency=True),
+                'Total_Empenhar': format_tag_value(calculos_frontend.get('total_empenhar', 0), is_currency=True),
+                'Vlr_Total_Extenso': (
+                    valor_extenso_sem_centavos_if_round(calculos_frontend.get('total_empenhar', 0))
+                    if calculos_frontend.get('total_empenhar', 0) else '-----'
+                ),
+
+                'Finalidade': processo_instance.objetivo_viagem,
+                'constaAnexo': 'Sim' if attachments else 'Não',
+                'ponto': 'SIM',
+                'Pagamento_Curso': (
+                    'Sim - ' + format_tag_value(processo_instance.valor_taxa_inscricao, is_currency=True)
+                ) if processo_instance.solicita_pagamento_inscricao else 'Não',
+                'justificaViagemAntecipada': processo_instance.justificativa_viagem_antecipada or 'Não se aplica.',
+                'observacoes': processo_instance.observacoes or '-----',
+                'extrair_data': format_date(local_created_at.date(), format='d \'de\' MMMM \'de\' yyyy', locale='pt_BR'),
+            }
+
+            # 6. Cria o documento no Drive e preenche as tags
+            doc_copy = google_drive_service.copy_file(
+                file_id=settings.GDOC_TEMPLATE_ID,
+                new_title=f"Solicitação de Diária - {processo_folder_name}",
+                parent_id=docs_folder['id']
+            )
+            google_docs_service.replace_tags(doc_copy['id'], replacements)
+            
+            # Envia e-mails, etc.
+
+            # Adicione esta linha para capturar o retorno da orquestração
+            orq_res = {
+                "doc_url": doc_copy.get('webViewLink'),
+                "folder_url": google_drive_service.get_folder_link(processo_folder['id']),
+            }
+            
+            # Envia e-mails, etc.
         except Exception as e:
             logger.exception("Erro ao orquestrar criação no GDrive: %s", e)
             return Response({"error": "Erro ao salvar documentos no Google Drive."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        # 9. salvar link da pasta no processo (campo gdrive_folder_id já existente)
+
+        # 10. enviar emails
         try:
             send_process_created_email(processo_instance, controle_emails, requester_email=request.user.email)
         except Exception:
             logger.exception("Falha ao enviar emails de notificação para processo %s", processo_instance.id)
 
+        # 11. resposta
         return Response({
             "id": processo_instance.id,
             "numero": processo_instance.numero,
