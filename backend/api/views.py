@@ -80,23 +80,63 @@ class GoogleAuthView(APIView):
             return Response({"error": token_data}, status=status.HTTP_400_BAD_REQUEST)
 
         id_token = token_data.get("id_token")
+        access_token = token_data.get("access_token")
         if not id_token:
             return Response({"error": "No id_token from Google"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. Valida o token com Google
-        info_res = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}")
-        user_info = info_res.json()
-
+        # Tenta obter dados completos (inclui picture) via userinfo
+        user_info = {}
+        if access_token:
+            ui = requests.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            if ui.ok:
+                user_info = ui.json()
+        if not user_info:
+            # fallback no tokeninfo (pode não ter picture)
+            info_res = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}")
+            user_info = info_res.json()
+        logger.info("GoogleAuth: email=%s given_name=%s family_name=%s picture_len=%s",
+            user_info.get("email"),
+            user_info.get("given_name"),
+            user_info.get("family_name"),
+            len(user_info.get("picture") or "") )
+        
         email = user_info.get("email")
         if not email:
             return Response({"error": "Invalid token info"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 3. Cria ou pega usuário
+        # 3. Cria ou pega usuário e atualiza nomes quando vierem do Google
+        given_name = user_info.get("given_name") or ""
+        family_name = user_info.get("family_name") or ""
+        picture = user_info.get("picture") or None
+
         user, created = User.objects.get_or_create(
             email=email,
-            defaults={"username": email, "first_name": user_info.get("given_name", "")}
+            defaults={"username": email, "first_name": given_name, "last_name": family_name}
         )
+        changed = False
+        if given_name and user.first_name != given_name:
+            user.first_name = given_name
+            changed = True
+        if family_name and user.last_name != family_name:
+            user.last_name = family_name
+            changed = True
+        if changed:
+            user.save(update_fields=["first_name", "last_name"])
 
+        # 3.1 garante Profile e salva URL da foto
+        from core.models import Profile
+        profile, _ = Profile.objects.get_or_create(user=user)
+        if picture and profile.picture_url != picture:
+            profile.picture_url = picture
+            profile.save(update_fields=["picture_url"])
+
+        
+        logger.info("GoogleAuth: profile saved user_id=%s picture_url=%s",
+            user.id, profile.picture_url)
         # 4. Gera JWT
         refresh = RefreshToken.for_user(user)
         return Response({

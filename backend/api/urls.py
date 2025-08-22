@@ -17,6 +17,7 @@ urlpatterns = [
     path("google-login/", GoogleAuthView.as_view(), name="google-login"),
     path('profile/me/', UserProfileView.as_view(), name='user-profile'),
     path('config/', ConfigDataView.as_view(), name='config-data'),
+    path("profile/me/", UserProfileView.as_view(), name="profile-me"),
 
     # por fim, as rotas geradas pelo router
     path('', include(router.urls)),

@@ -5,6 +5,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save
 
+
 class Role(models.Model):
     name = models.CharField(max_length=100, unique=True, verbose_name="Nome do Perfil")
     # Ex: 'solicitante', 'controle_interno', etc.
@@ -24,11 +25,12 @@ class Profile(models.Model):
     Modelo de Perfil para estender o modelo de usuário padrão do Django
     com informações adicionais específicas da nossa aplicação.
     """
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='profile')
     cpf = models.CharField(max_length=14, null=True, blank=True, help_text="Formato: 123.456.789-00")
     cargo = models.CharField(max_length=100, null=True, blank=True)
     lotacao = models.CharField("Lotação", max_length=100, null=True, blank=True)
     roles = models.ManyToManyField(Role, blank=True, related_name='profiles', verbose_name="Perfis de Acesso")
+    picture_url = models.URLField(max_length=500, blank=True, null=True) 
 
     def __str__(self):
         return f'Perfil de {self.user.username}'
