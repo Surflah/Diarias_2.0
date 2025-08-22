@@ -27,7 +27,30 @@ from num2words import num2words
 
 import json
 import math
-from babel.dates import format_date
+# `babel` é utilizado apenas para formatar datas em português. Como esse
+# pacote pode não estar disponível em todos os ambientes (por exemplo, nos
+# testes automatizados), tentamos importá-lo de forma opcional e provemos um
+# fallback simples caso a importação falhe.
+try:  # pragma: no cover - comportamento dependente de ambiente
+    from babel.dates import format_date as babel_format_date
+except ModuleNotFoundError:  # pragma: no cover
+    babel_format_date = None
+
+
+def format_date(value, format="d 'de' MMMM 'de' yyyy", locale="pt_BR"):
+    """Formata a data em português.
+
+    Se `babel` não estiver instalado, realiza uma formatação manual.
+    """
+    if babel_format_date:
+        return babel_format_date(value, format=format, locale=locale)
+
+    # Fallback manual com nomes de meses em português
+    months = [
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    ]
+    return f"{value.day:02d} de {months[value.month-1]} de {value.year}"
 
 
 from core.services.calculos_service import calcular_valor_diarias, calcular_valor_deslocamento, CalculoServiceError
