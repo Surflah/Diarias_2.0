@@ -11,7 +11,8 @@ interface UserProfile {
   cpf: string | null;
   cargo: string | null;
   lotacao: string | null;
-  roles: string[]; 
+  roles: string[];
+  picture?: string | null;
 }
 
 interface AuthContextType {
