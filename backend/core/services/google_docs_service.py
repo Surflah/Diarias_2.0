@@ -1,10 +1,17 @@
 # core/services/google_docs_service.py
 import io
 import logging
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2 import service_account
 from django.conf import settings
+
+# As importações do Google API são opcionais para evitar falhas de import
+# quando o pacote `google-api-python-client` não estiver disponível. Assim,
+# módulos que não utilizam o Google Docs podem ser carregados normalmente.
+try:  # pragma: no cover - comportamento dependente de ambiente
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload
+    from google.oauth2 import service_account
+except ModuleNotFoundError:  # pragma: no cover
+    build = MediaIoBaseDownload = service_account = None
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +21,16 @@ SCOPES = [
 ]
 
 def _get_docs_service():
+    if build is None or service_account is None:
+        raise ModuleNotFoundError(
+            "google-api-python-client não está instalado. "
+            "Instale a dependência para utilizar o Google Docs."
+        )
+
     sa_file = getattr(settings, "GOOGLE_SERVICE_ACCOUNT_FILE", None)
     if not sa_file:
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_FILE não configurado em settings.")
+
     creds = service_account.Credentials.from_service_account_file(sa_file, scopes=SCOPES)
     return build("docs", "v1", credentials=creds, cache_discovery=False)
 
@@ -61,12 +75,18 @@ def export_to_pdf(document_id):
     Retorna bytes do PDF exportado do Google Docs (via Drive export).
     """
     # usamos Drive export via API Drive
-    from googleapiclient.discovery import build
-    from google.oauth2 import service_account
+    if build is None or service_account is None or MediaIoBaseDownload is None:
+        raise ModuleNotFoundError(
+            "google-api-python-client não está instalado. "
+            "Instale a dependência para exportar documentos."
+        )
+
     sa_file = getattr(settings, "GOOGLE_SERVICE_ACCOUNT_FILE", None)
     if not sa_file:
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_FILE não configurado em settings.")
-    creds = service_account.Credentials.from_service_account_file(sa_file, scopes=["https://www.googleapis.com/auth/drive"])
+    creds = service_account.Credentials.from_service_account_file(
+        sa_file, scopes=["https://www.googleapis.com/auth/drive"]
+    )
     drive_svc = build("drive", "v3", credentials=creds, cache_discovery=False)
     request = drive_svc.files().export_media(fileId=document_id, mimeType="application/pdf")
     fh = io.BytesIO()
