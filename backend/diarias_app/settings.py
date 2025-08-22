@@ -245,6 +245,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 DEFAULT_FROM_EMAIL = 'webmaster@localhost'
 
+# lista de emails do controle interno (separados por vírgula na env CONTROLE_INTERNO_EMAILS)
+CONTROLE_INTERNO_EMAILS = [e.strip() for e in os.getenv('CONTROLE_INTERNO_EMAILS', '').split(',') if e.strip()]
+
 # Redirecionamentos básicos
 LOGIN_REDIRECT_URL = '/'
 ACCOUNT_ADAPTER = 'allauth.account.adapter.DefaultAccountAdapter'
