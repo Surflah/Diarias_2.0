@@ -1,10 +1,16 @@
 # core/services/google_docs_service.py
 import io
 import logging
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2 import service_account
 from django.conf import settings
+
+try:
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload
+    from google.oauth2 import service_account
+except ModuleNotFoundError:  # pragma: no cover
+    build = None
+    MediaIoBaseDownload = None
+    service_account = None
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +21,8 @@ SCOPES = [
 
 def _get_docs_service():
     sa_file = getattr(settings, "GOOGLE_SERVICE_ACCOUNT_FILE", None)
-    if not sa_file:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_FILE não configurado em settings.")
+    if not sa_file or service_account is None or build is None:
+        raise RuntimeError("Dependências do Google Docs não configuradas corretamente.")
     creds = service_account.Credentials.from_service_account_file(sa_file, scopes=SCOPES)
     return build("docs", "v1", credentials=creds, cache_discovery=False)
 
@@ -61,13 +67,16 @@ def export_to_pdf(document_id):
     Retorna bytes do PDF exportado do Google Docs (via Drive export).
     """
     # usamos Drive export via API Drive
-    from googleapiclient.discovery import build
-    from google.oauth2 import service_account
+    try:
+        from googleapiclient.discovery import build as drive_build
+        from google.oauth2 import service_account as drive_sa
+    except ModuleNotFoundError:  # pragma: no cover
+        raise RuntimeError("Dependências do Google Drive não configuradas.")
     sa_file = getattr(settings, "GOOGLE_SERVICE_ACCOUNT_FILE", None)
     if not sa_file:
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_FILE não configurado em settings.")
-    creds = service_account.Credentials.from_service_account_file(sa_file, scopes=["https://www.googleapis.com/auth/drive"])
-    drive_svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+    creds = drive_sa.Credentials.from_service_account_file(sa_file, scopes=["https://www.googleapis.com/auth/drive"])
+    drive_svc = drive_build("drive", "v3", credentials=creds, cache_discovery=False)
     request = drive_svc.files().export_media(fileId=document_id, mimeType="application/pdf")
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)

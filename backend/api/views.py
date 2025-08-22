@@ -27,7 +27,13 @@ from num2words import num2words
 
 import json
 import math
-from babel.dates import format_date
+# babel é usado apenas para formatações mais sofisticadas de datas. Se não estiver
+# disponível, caímos para uma formatação simples pt-BR.
+try:  # pragma: no cover - fallback para ambientes sem Babel
+    from babel.dates import format_date
+except ModuleNotFoundError:  # pragma: no cover
+    def format_date(date_obj, format="d 'de' MMMM 'de' yyyy", locale="pt_BR"):
+        return date_obj.strftime("%d/%m/%Y")
 
 
 from core.services.calculos_service import calcular_valor_diarias, calcular_valor_deslocamento, CalculoServiceError
@@ -247,6 +253,7 @@ class ProcessoViewSet(viewsets.ModelViewSet):
                     processo=processo_instance,
                     nome_arquivo=f.name,
                     gdrive_file_id=uploaded_file['id'],
+                    gdrive_file_url=uploaded_file.get('webViewLink'),
                     tipo_documento=Documento.TipoDocumento.OUTRO,
                     uploaded_by=request.user
                 )
@@ -272,35 +279,41 @@ class ProcessoViewSet(viewsets.ModelViewSet):
                 'Hora_Partida': timezone.localtime(processo_instance.data_saida).strftime('%d/%m/%Y %H:%M'),
                 'Hora_Retorno': timezone.localtime(processo_instance.data_retorno).strftime('%d/%m/%Y %H:%M'),
                 'Transporte': processo_instance.get_meio_transporte_display(),
-                'placa': processo_instance.placa_veiculo or 'Não aplicável',
+                'placa': f"Placa: {processo_instance.placa_veiculo}" if processo_instance.placa_veiculo else '-----',
                 'solicitadoEm': local_created_at.strftime('%d/%m/%Y %H:%M'),
                 'Periodo_Viagem': periodo_viagem_str,
-                
-                'numCom': diarias_data.get('num_com_pernoite', 0),
-                'upmCom': diarias_data.get('upm_com_pernoite', 0),
-                'vlrUPM': f"R$ {diarias_data.get('valor_upm_usado', 0):.2f}".replace('.',','),
-                'totalCom': f"R$ {diarias_data.get('total_com_pernoite', 0):.2f}".replace('.',','),
-                'numSem': diarias_data.get('num_sem_pernoite', 0),
-                'upmSem': diarias_data.get('upm_sem_pernoite', 0),
-                'totalSem': f"R$ {diarias_data.get('total_sem_pernoite', 0):.2f}".replace('.',','),
-                'numMeia': diarias_data.get('num_meia_diaria', 0),
-                'upmMeia': diarias_data.get('upm_meia_diaria', 0),
-                'totalMeia': f"R$ {diarias_data.get('total_meia_diaria', 0):.2f}".replace('.',','),
-                'totalDiarias': f"R$ {diarias_data.get('valor_total_diarias', 0):.2f}".replace('.',','),
-                
-                'kmTotal': deslocamento_data.get('distancia_km', 0),
-                'precoGas': f"R$ {deslocamento_data.get('preco_gas_usado', 0):.2f}".replace('.',','),
-                'vlrDeslocamento': f"R$ {deslocamento_data.get('valor_deslocamento', 0):.2f}".replace('.',','),
-                
-                'totEmpenhar': f"R$ {calculos_frontend.get('total_empenhar', 0):.2f}".replace('.',','),
-                'Total_Empenhar': f"R$ {calculos_frontend.get('total_empenhar', 0):.2f}".replace('.',','),
-                'Vlr_Total_Extenso': valor_extenso_sem_centavos_if_round(calculos_frontend.get('total_empenhar', 0)),
+
+                'numCom': format_tag_value(diarias_data.get('num_com_pernoite', 0)),
+                'upmCom': format_tag_value(diarias_data.get('upm_com_pernoite', 0)),
+                'vlrUPM': format_tag_value(diarias_data.get('valor_upm_usado', 0), is_currency=True),
+                'totalCom': format_tag_value(diarias_data.get('total_com_pernoite', 0), is_currency=True),
+                'numSem': format_tag_value(diarias_data.get('num_sem_pernoite', 0)),
+                'upmSem': format_tag_value(diarias_data.get('upm_sem_pernoite', 0)),
+                'totalSem': format_tag_value(diarias_data.get('total_sem_pernoite', 0), is_currency=True),
+                'numMeia': format_tag_value(diarias_data.get('num_meia_diaria', 0)),
+                'upmMeia': format_tag_value(diarias_data.get('upm_meia_diaria', 0)),
+                'totalMeia': format_tag_value(diarias_data.get('total_meia_diaria', 0), is_currency=True),
+                'totalDiarias': format_tag_value(diarias_data.get('valor_total_diarias', 0), is_currency=True),
+
+                'kmTotal': format_tag_value(deslocamento_data.get('distancia_km', 0)),
+                'precoGas': format_tag_value(deslocamento_data.get('preco_gas_usado', 0), is_currency=True),
+                'vlrDeslocamento': format_tag_value(deslocamento_data.get('valor_deslocamento', 0), is_currency=True),
+
+                'totEmpenhar': format_tag_value(calculos_frontend.get('total_empenhar', 0), is_currency=True),
+                'Total_Empenhar': format_tag_value(calculos_frontend.get('total_empenhar', 0), is_currency=True),
+                'Vlr_Total_Extenso': (
+                    valor_extenso_sem_centavos_if_round(calculos_frontend.get('total_empenhar', 0))
+                    if calculos_frontend.get('total_empenhar', 0) else '-----'
+                ),
 
                 'Finalidade': processo_instance.objetivo_viagem,
                 'constaAnexo': 'Sim' if attachments else 'Não',
                 'ponto': 'SIM',
-                'Pagamento_Curso': 'Sim' if processo_instance.solicita_pagamento_inscricao else 'Não',
+                'Pagamento_Curso': (
+                    'Sim - ' + format_tag_value(processo_instance.valor_taxa_inscricao, is_currency=True)
+                ) if processo_instance.solicita_pagamento_inscricao else 'Não',
                 'justificaViagemAntecipada': processo_instance.justificativa_viagem_antecipada or 'Não se aplica.',
+                'observacoes': processo_instance.observacoes or '-----',
                 'extrair_data': format_date(local_created_at.date(), format='d \'de\' MMMM \'de\' yyyy', locale='pt_BR'),
             }
 

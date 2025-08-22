@@ -238,6 +238,7 @@ class Documento(models.Model):
     processo = models.ForeignKey(Processo, on_delete=models.CASCADE, related_name='documentos')
     nome_arquivo = models.CharField("Nome do Arquivo", max_length=255)
     gdrive_file_id = models.CharField("ID do Arquivo no Drive", max_length=100, unique=True)
+    gdrive_file_url = models.URLField("URL do Arquivo no Drive", max_length=500, blank=True, null=True)
     tipo_documento = models.CharField(
         "Tipo do Documento",
         max_length=30,

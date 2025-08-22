@@ -2,11 +2,21 @@
 
 import io
 import logging
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from googleapiclient.errors import HttpError
-from google.oauth2 import service_account
 from django.conf import settings
+
+try:
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+    from googleapiclient.errors import HttpError
+    from google.oauth2 import service_account
+except ModuleNotFoundError:  # pragma: no cover - fallback for environments sem googleapiclient
+    build = None
+    MediaIoBaseUpload = None
+    service_account = None
+
+    class HttpError(Exception):
+        """Fallback exception quando googleapiclient não está instalado."""
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +28,8 @@ SCOPES = [
 
 def _get_drive_service():
     sa_file = getattr(settings, "GOOGLE_SERVICE_ACCOUNT_FILE", None)
-    if not sa_file:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_FILE não configurado em settings.")
+    if not sa_file or service_account is None or build is None:
+        raise RuntimeError("Dependências do Google Drive não configuradas corretamente.")
     creds = service_account.Credentials.from_service_account_file(sa_file, scopes=SCOPES)
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
