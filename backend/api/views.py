@@ -314,6 +314,13 @@ class ProcessoViewSet(viewsets.ModelViewSet):
             
             # Envia e-mails, etc.
 
+            # Adicione esta linha para capturar o retorno da orquestração
+            orq_res = {
+                "doc_url": doc_copy.get('webViewLink'),
+                "folder_url": google_drive_service.get_folder_link(processo_folder['id']),
+            }
+            
+            # Envia e-mails, etc.
         except Exception as e:
             logger.exception("Erro ao orquestrar criação no GDrive: %s", e)
             return Response({"error": "Erro ao salvar documentos no Google Drive."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
