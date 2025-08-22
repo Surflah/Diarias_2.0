@@ -2,27 +2,33 @@
 
 import requests
 from django.contrib.auth import get_user_model
-from decimal import Decimal, ROUND_HALF_UP
+from django.db import transaction
+from django.db.models import Max
+from django.utils import timezone
 from django.conf import settings
+from django.db import transaction
+
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status, viewsets, permissions, generics
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.decorators import action
+
+from decimal import Decimal, ROUND_HALF_UP
 
 
-from core.models import Processo, ParametrosSistema, Feriado
-from core.services import calculos_service
+from core.models import Processo, ParametrosSistema, Feriado, Documento, Profile
+from core.services import calculos_service, google_drive_service, google_docs_service
 from .serializers import ProcessoSerializer, ParametrosSistemaSerializer, FeriadoSerializer, ProfileSerializer, CalculoPreviewSerializer
 
-from rest_framework.decorators import action
 from core.services.orquestrador_gdrive import create_process_folder_and_doc
 from core.services.email_service import send_process_created_email
-from django.db import transaction
-
-from django.db.models import Max
-from django.utils import timezone
-from core.models import Profile 
 from num2words import num2words
+
+import json
+import math
+from babel.dates import format_date
+
 
 from core.services.calculos_service import calcular_valor_diarias, calcular_valor_deslocamento, CalculoServiceError
 import logging
@@ -111,6 +117,21 @@ def valor_extenso_sem_centavos_if_round(value):
     else:
         # usar formatação de moeda, que inclui centavos
         return num2words(float(v), lang='pt_BR', to='currency')
+    
+def format_tag_value(value, prefix="", suffix="", is_currency=False):
+    """
+    Formata valores para as tags. Se o valor for 0 ou None, retorna '-----'.
+    Adiciona prefixo e sufixo se o valor for válido.
+    """
+    if value is None or float(value) == 0:
+        return "-----"
+    
+    if is_currency:
+        # Formata como R$ 1.234,56
+        formatted_value = f"{float(value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {formatted_value}"
+        
+    return f"{prefix}{value}{suffix}"
 
 class ProcessoViewSet(viewsets.ModelViewSet):
     """
@@ -166,155 +187,145 @@ class ProcessoViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='submit', permission_classes=[permissions.IsAuthenticated])
     def submit(self, request, *args, **kwargs):
         """
-        Endpoint multipart: espera campo 'processo' (JSON) e zero ou mais 'files' (anexos).
-        Exemplo:
-          FormData { processo: JSON.stringify({...}), files: File }
+        Endpoint multipart aprimorado:
+        - Espera 'processo' (JSON) e 'files' (anexos).
+        - Usa os cálculos do frontend para preencher o documento.
+        - Faz o upload dos arquivos para o Google Drive.
+        - Preenche todas as tags do template corretamente.
         """
-        # 1. obter payload JSON
-        processo_json = None
-        if 'processo' in request.data:
-            # quando front envia como FormData stringified
-            try:
-                import json
-                processo_json = json.loads(request.data.get('processo'))
-            except Exception:
-                return Response({"error": "Campo 'processo' inválido (não é JSON)."}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            processo_json = request.data
+        # 1. Obter e validar payload JSON
+        try:
+            processo_json = json.loads(request.data.get('processo'))
+            # Extrai os cálculos enviados pelo frontend para usar no doc
+            calculos_frontend = processo_json.pop('calculos', {})
+        except (json.JSONDecodeError, TypeError):
+            return Response({"error": "Campo 'processo' (JSON) inválido ou ausente."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. validar via serializer
         serializer = self.get_serializer(data=processo_json)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        # 3. salvar processo inicial (sem ano/numero ainda)
+        # 2. Salvar processo inicial e gerar número/ano
         try:
             with transaction.atomic():
                 processo_instance = serializer.save(solicitante=request.user)
-
-                # calcula ano atual (poderia usar data_saida.year se preferir)
                 ano_atual = timezone.now().year
-
-                # pega maior numero já usado no ano (lock lógico via transaction)
                 last_num = Processo.objects.filter(ano=ano_atual).aggregate(Max('numero'))['numero__max'] or 0
-                next_num = int(last_num) + 1
-
                 processo_instance.ano = ano_atual
-                processo_instance.numero = next_num
-
-                # cálculos: diárias e deslocamento (tenta usar serviços existentes)
-                try:
-                    diarias_data = calculos_service.calcular_diarias(processo=processo_instance)
-                except Exception:
-                    diarias_data = {}
-                try:
-                    deslocamento_data = calculos_service.calcular_deslocamento(
-                        destino=processo_instance.destino,
-                        data_saida=processo_instance.data_saida,
-                        data_retorno=processo_instance.data_retorno
-                    )
-                except Exception:
-                    deslocamento_data = {"valor_deslocamento": 0, "distancia_km": 0, "preco_gas_usado": 0}
-
-                processo_instance.valor_total_diarias = diarias_data.get('valor_total_diarias', 0)
-                processo_instance.valor_deslocamento = deslocamento_data.get('valor_deslocamento', 0)
-                processo_instance.distancia_total_km = deslocamento_data.get('distancia_km', 0)
-                processo_instance.valor_total_empenhar = (
-                    (processo_instance.valor_total_diarias or 0) + (processo_instance.valor_deslocamento or 0)
-                )
-
-                processo_instance.save(update_fields=[
-                    'ano', 'numero', 'valor_total_diarias', 'valor_deslocamento', 'distancia_total_km', 'valor_total_empenhar'
-                ])
+                processo_instance.numero = int(last_num) + 1
+                
+                # Atualiza o processo com os valores calculados do frontend para persistência
+                processo_instance.valor_total_diarias = Decimal(calculos_frontend.get('calculo_diarias', {}).get('valor_total_diarias', 0))
+                processo_instance.valor_deslocamento = Decimal(calculos_frontend.get('calculo_deslocamento', {}).get('valor_deslocamento', 0))
+                processo_instance.distancia_total_km = int(calculos_frontend.get('calculo_deslocamento', {}).get('distancia_km', 0))
+                processo_instance.valor_total_empenhar = Decimal(calculos_frontend.get('total_empenhar', 0))
+                
+                processo_instance.save()
 
         except Exception as e:
-            logger.exception("Falha ao criar processo: %s", e)
-            return Response({"error": "Erro interno ao criar processo."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Falha ao criar processo no banco de dados: %s", e)
+            return Response({"error": "Erro interno ao salvar o processo."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # 4. anexos recebidos
-        attachments = request.FILES.getlist('files')
-
-        # 5. preparar lista de e-mails do controle interno (buscar perfis com role slug 'controle_interno')
-        controle_users_qs = User.objects.filter(profile__roles__slug='controle_interno').distinct()
-        controle_emails = [u.email for u in controle_users_qs if u.email]
-
-        # 6. buscar nome do presidente (profile com role 'presidente' — assume apenas 1)
-        presidente_profile = Profile.objects.filter(roles__slug='presidente').select_related('user').first()
-        presidente_nome = presidente_profile.user.get_full_name() if presidente_profile else ""
-
-        # 7. montar replacements para o Google Doc (mapear tags do template)
-        # Nota: adapte nomes de tags exatamente como no seu template (case-sensitive).
-        # Use valores calculados acima (diarias_data, deslocamento_data).
-        replacements = {
-            # voz do template — verifique maiúsculas/minúsculas conforme seu Google Doc
-            'Numero': f"{processo_instance.numero}",
-            'NOME_BENEFICIARIO': processo_instance.solicitante.get_full_name(),
-            'Nome': processo_instance.solicitante.get_full_name(),
-            'CPF': getattr(processo_instance.solicitante.profile, 'cpf', '') or '',
-            'LOTAÇÃO': "C.M.V. Itapoá",
-            'Cargo': getattr(processo_instance.solicitante.profile, 'cargo', '') or '',
-            'Local_Destino': processo_instance.destino,
-            'Hora_Partida': processo_instance.data_saida.strftime("%d/%m/%Y %H:%M") if processo_instance.data_saida else '',
-            'Hora_Retorno': processo_instance.data_retorno.strftime("%d/%m/%Y %H:%M") if processo_instance.data_retorno else '',
-            'Transporte': processo_instance.meio_transporte,
-            'placa': processo_instance.placa_veiculo or '',
-            'solicitadoEm': processo_instance.created_at.strftime("%d/%m/%Y %H:%M"),
-            'Periodo_Viagem': f"{processo_instance.data_saida.strftime('%d/%m/%Y')} — {processo_instance.data_retorno.strftime('%d/%m/%Y')}" if processo_instance.data_saida and processo_instance.data_retorno else '',
-            # diárias (pegando de diarias_data quando disponível, senão usando campos do processo)
-            'numCom': diarias_data.get('num_com_pernoite', processo_instance.num_com_pernoite if hasattr(processo_instance, 'num_com_pernoite') else 0),
-            'upmCom': diarias_data.get('upm_com_pernoite', 0),
-            'vlrUPM': diarias_data.get('valor_upm_usado', 0),
-            'totalCom': diarias_data.get('total_com_pernoite', 0),
-            'numSem': diarias_data.get('num_sem_pernoite', processo_instance.num_sem_pernoite if hasattr(processo_instance, 'num_sem_pernoite') else 0),
-            'upmSem': diarias_data.get('upm_sem_pernoite', 0),
-            'totalSem': diarias_data.get('total_sem_pernoite', 0),
-            'numMeia': diarias_data.get('num_meia_diaria', processo_instance.num_meia_diaria if hasattr(processo_instance, 'num_meia_diaria') else 0),
-            'upmMeia': diarias_data.get('upm_meia_diaria', 0),
-            'totalMeia': diarias_data.get('total_meia_diaria', 0),
-            'totalDiarias': diarias_data.get('valor_total_diarias', processo_instance.valor_total_diarias or 0),
-            # deslocamento
-            'kmTotal': deslocamento_data.get('distancia_km', processo_instance.distancia_total_km or 0),
-            'precoGas': deslocamento_data.get('preco_gas_usado', 0),
-            'vlrDeslocamento': deslocamento_data.get('valor_deslocamento', processo_instance.valor_deslocamento or 0),
-            'totEmpenhar': processo_instance.valor_total_empenhar or 0,
-            'Finalidade': processo_instance.objetivo_viagem,
-            'constaAnexo': 'Sim' if attachments else 'Não',
-            'ponto': 'SIM',  # conforme seu requisito (fixo)
-            'Pagamento_Curso': 'Sim' if processo_instance.solicita_pagamento_inscricao else 'Não',
-            'observacoes': getattr(processo_instance, 'observacoes', '') or '',
-            'justificaViagemAntecipada': getattr(processo_instance, 'justificativa_viagem_antecipada', '') or '',
-            # assinatura / nomes
-            'NomePresidente': presidente_nome or '',
-            # o campo abaixo (Total_Empenhar) repetido — boas práticas: use o mesmo valor
-            'Total_Empenhar': processo_instance.valor_total_empenhar or 0,
-            # se quiser um campo por extenso, veja observação abaixo
-            'Vlr_Total_Extenso': valor_extenso_sem_centavos_if_round(processo_instance.valor_total_empenhar or 0),
-
-            'extrair_data': processo_instance.created_at.strftime("%d/%m/%Y") if processo_instance.created_at else '',
-        }
-
-        # 8. chamar orquestrador para criar pastas/doc no Drive e subir anexos
+        # 3. Orquestração com o Google Drive
         try:
-            orq_res = create_process_folder_and_doc(
-                processo=processo_instance,
-                replacements=replacements,
-                attachments=attachments,
-                root_drive_id=getattr(settings, 'GDRIVE_ROOT_FOLDER_ID', None),
-                template_id=getattr(settings, 'GDOC_TEMPLATE_ID', None),
-                controle_interno_emails=controle_emails,
-                requester_email=request.user.email
+            # Cria a estrutura de pastas
+            root_folder_id = settings.GDRIVE_ROOT_FOLDER_ID
+            ano_folder = google_drive_service.ensure_folder(root_folder_id, str(processo_instance.ano))
+            processo_folder_name = f"Diária {processo_instance.numero}-{processo_instance.ano} - {processo_instance.solicitante.get_full_name()}"
+            processo_folder = google_drive_service.ensure_folder(ano_folder['id'], processo_folder_name)
+            docs_folder = google_drive_service.ensure_folder(processo_folder['id'], "1 - Documentos recebidos na requisição")
+            
+            # Salva o ID da pasta principal no processo
+            processo_instance.gdrive_folder_id = processo_folder['id']
+            processo_instance.save(update_fields=['gdrive_folder_id'])
+
+            # 4. Faz o upload dos arquivos anexados
+            attachments = request.FILES.getlist('files')
+            for f in attachments:
+                uploaded_file = google_drive_service.upload_file(docs_folder['id'], f.name, f, f.content_type)
+                Documento.objects.create(
+                    processo=processo_instance,
+                    nome_arquivo=f.name,
+                    gdrive_file_id=uploaded_file['id'],
+                    tipo_documento=Documento.TipoDocumento.OUTRO,
+                    uploaded_by=request.user
+                )
+
+            # 5. Prepara os dados para o template do Google Docs
+            local_created_at = timezone.localtime(processo_instance.created_at)
+            
+            # Cálculo correto do período da viagem
+            delta_dias = processo_instance.data_retorno - processo_instance.data_saida
+            numero_dias = math.ceil(delta_dias.total_seconds() / 86400)
+            periodo_viagem_str = f"{int(numero_dias)} dia(s)"
+
+            diarias_data = calculos_frontend.get('calculo_diarias', {})
+            deslocamento_data = calculos_frontend.get('calculo_deslocamento', {})
+
+            # Dicionário de substituição de tags CORRIGIDO
+            replacements = {
+                'Numero': f"{processo_instance.numero}-{processo_instance.ano}",
+                'Nome': processo_instance.solicitante.get_full_name(),
+                'CPF': processo_instance.solicitante.profile.cpf or '',
+                'Cargo': processo_instance.solicitante.profile.cargo or '',
+                'Local_Destino': processo_instance.destino,
+                'Hora_Partida': timezone.localtime(processo_instance.data_saida).strftime('%d/%m/%Y %H:%M'),
+                'Hora_Retorno': timezone.localtime(processo_instance.data_retorno).strftime('%d/%m/%Y %H:%M'),
+                'Transporte': processo_instance.get_meio_transporte_display(),
+                'placa': processo_instance.placa_veiculo or 'Não aplicável',
+                'solicitadoEm': local_created_at.strftime('%d/%m/%Y %H:%M'),
+                'Periodo_Viagem': periodo_viagem_str,
+                
+                'numCom': diarias_data.get('num_com_pernoite', 0),
+                'upmCom': diarias_data.get('upm_com_pernoite', 0),
+                'vlrUPM': f"R$ {diarias_data.get('valor_upm_usado', 0):.2f}".replace('.',','),
+                'totalCom': f"R$ {diarias_data.get('total_com_pernoite', 0):.2f}".replace('.',','),
+                'numSem': diarias_data.get('num_sem_pernoite', 0),
+                'upmSem': diarias_data.get('upm_sem_pernoite', 0),
+                'totalSem': f"R$ {diarias_data.get('total_sem_pernoite', 0):.2f}".replace('.',','),
+                'numMeia': diarias_data.get('num_meia_diaria', 0),
+                'upmMeia': diarias_data.get('upm_meia_diaria', 0),
+                'totalMeia': f"R$ {diarias_data.get('total_meia_diaria', 0):.2f}".replace('.',','),
+                'totalDiarias': f"R$ {diarias_data.get('valor_total_diarias', 0):.2f}".replace('.',','),
+                
+                'kmTotal': deslocamento_data.get('distancia_km', 0),
+                'precoGas': f"R$ {deslocamento_data.get('preco_gas_usado', 0):.2f}".replace('.',','),
+                'vlrDeslocamento': f"R$ {deslocamento_data.get('valor_deslocamento', 0):.2f}".replace('.',','),
+                
+                'totEmpenhar': f"R$ {calculos_frontend.get('total_empenhar', 0):.2f}".replace('.',','),
+                'Total_Empenhar': f"R$ {calculos_frontend.get('total_empenhar', 0):.2f}".replace('.',','),
+                'Vlr_Total_Extenso': valor_extenso_sem_centavos_if_round(calculos_frontend.get('total_empenhar', 0)),
+
+                'Finalidade': processo_instance.objetivo_viagem,
+                'constaAnexo': 'Sim' if attachments else 'Não',
+                'ponto': 'SIM',
+                'Pagamento_Curso': 'Sim' if processo_instance.solicita_pagamento_inscricao else 'Não',
+                'justificaViagemAntecipada': processo_instance.justificativa_viagem_antecipada or 'Não se aplica.',
+                'extrair_data': format_date(local_created_at.date(), format='d \'de\' MMMM \'de\' yyyy', locale='pt_BR'),
+            }
+
+            # 6. Cria o documento no Drive e preenche as tags
+            doc_copy = google_drive_service.copy_file(
+                file_id=settings.GDOC_TEMPLATE_ID,
+                new_title=f"Solicitação de Diária - {processo_folder_name}",
+                parent_id=docs_folder['id']
             )
+            google_docs_service.replace_tags(doc_copy['id'], replacements)
+            
+            # Envia e-mails, etc.
+
+            # Adicione esta linha para capturar o retorno da orquestração
+            orq_res = {
+                "doc_url": doc_copy.get('webViewLink'),
+                "folder_url": google_drive_service.get_folder_link(processo_folder['id']),
+            }
+            
+            # Envia e-mails, etc.
         except Exception as e:
             logger.exception("Erro ao orquestrar criação no GDrive: %s", e)
             return Response({"error": "Erro ao salvar documentos no Google Drive."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # 9. salvar link da pasta no processo (campo gdrive_folder_id já existente)
-        try:
-            if orq_res.get('process_folder_id'):
-                processo_instance.gdrive_folder_id = orq_res.get('process_folder_id')
-                processo_instance.save(update_fields=['gdrive_folder_id'])
-        except Exception:
-            logger.exception("Falha ao salvar gdrive_folder_id no processo %s", processo_instance.id)
 
         # 10. enviar emails
         try:

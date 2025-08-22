@@ -156,8 +156,10 @@ class Processo(models.Model):
         "Solicita pagamento de taxa de inscrição?",
         default=False
     )
-
-    # --- Valores Calculados e Armazenados ---
+    justificativa_viagem_antecipada = models.TextField(
+        "Justificativa da Viagem Antecipada",
+        blank=True, null=True
+    )
     distancia_total_km = models.PositiveIntegerField(
         "Distância Total (km)",
         null=True, blank=True,
@@ -179,7 +181,8 @@ class Processo(models.Model):
         "Valor Total a Empenhar (R$)",
         max_digits=10, decimal_places=2, default=0.0
     )
-
+    observacoes = models.TextField("Observações", blank=True, null=True)
+   
     # --- Metadados e Controle ---
     gdrive_folder_id = models.CharField(max_length=100, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)

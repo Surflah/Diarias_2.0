@@ -26,7 +26,8 @@ class ProcessoSerializer(serializers.ModelSerializer):
             'meio_transporte', 'placa_veiculo', 'envolve_passagens_aereas',
             'solicita_pagamento_inscricao', 'distancia_total_km',
             'valor_total_diarias', 'valor_deslocamento', 'valor_taxa_inscricao',
-            'valor_total_empenhar', 'created_at'
+            'valor_total_empenhar', 'created_at', 'justificativa_viagem_antecipada',
+            'observacoes',
         ]
         read_only_fields = [
             'id', 'solicitante', 'solicitante_nome', 'status', 'status_display',

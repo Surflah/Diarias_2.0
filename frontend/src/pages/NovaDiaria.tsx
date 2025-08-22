@@ -160,9 +160,22 @@ export const NovaDiaria = () => {
       errors['data_retorno'] = 'A data de retorno não pode ser anterior à data de saída.';
     }
 
+    if (formData.meio_transporte === 'VEICULO_PROPRIO' && !formData.placa_veiculo.trim()) {
+      errors.placa_veiculo = 'A placa do veículo é obrigatória.';
+    }
+
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) {
       const el = document.getElementsByName('justificativa_viagem_antecipada')[0] as HTMLElement | undefined;
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    if (Object.keys(errors).length > 0) {
+      alert('Por favor, corrija os erros no formulário antes de enviar.');
+      // Opcional: focar no primeiro campo com erro
+      const firstErrorKey = Object.keys(errors)[0];
+      const el = document.getElementsByName(firstErrorKey)[0] as HTMLElement | undefined;
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
@@ -177,39 +190,35 @@ export const NovaDiaria = () => {
         destino: formData.destino,
         data_saida: formData.data_saida ? formData.data_saida.toISOString() : null,
         data_retorno: formData.data_retorno ? formData.data_retorno.toISOString() : null,
-        meio_transporte: formData.meio_transporte || null,
         placa_veiculo: formData.placa_veiculo || null,
         solicita_viagem_antecipada: formData.solicita_viagem_antecipada || false,
-        justificativa_viagem_antecipada: formData.justificativa_viagem_antecipada || '',
-        objetivo_viagem: formData.finalidade_viagem || '',
-        solicita_pagamento_inscricao: formData.solicita_pagamento_inscricao || false,
-        valor_taxa_inscricao: Number(formData.valor_taxa_inscricao || 0),
         observacoes: formData.observacoes || '',
-        // campos calculados / internos — útil para o backend
         regiao_diaria: formData.regiao_diaria,
         tipo_diaria: formData.tipo_diaria,
-        num_com_pernoite: formData.num_com_pernoite,
-        num_sem_pernoite: formData.num_sem_pernoite,
-        num_meia_diaria: formData.num_meia_diaria,
+        meio_transporte: formData.meio_transporte,
+        objetivo_viagem: formData.finalidade_viagem,
+        solicita_pagamento_inscricao: formData.solicita_pagamento_inscricao,
+        valor_taxa_inscricao: formData.valor_taxa_inscricao,
+        justificativa_viagem_antecipada: formData.justificativa_viagem_antecipada,
+        
+        // **CRÍTICO**: Enviamos o objeto de cálculos junto.
+        // O backend usará isso para preencher o documento com os valores exatos que o usuário viu.
+        calculos: calculoData,
       };
 
+       // 2. Cria o FormData
       const form = new FormData();
+      // Anexa o JSON stringificado com a chave 'processo'
       form.append('processo', JSON.stringify(processoPayload));
 
-      // anexar arquivos
-      attachedFiles.forEach((f) => {
-        form.append('files', f, f.name);
+      // Anexa os arquivos com a chave 'files'
+      attachedFiles.forEach((file) => {
+        form.append('files', file);
       });
 
-      // POST para o endpoint que criamos
-      const resp = await apiClient.post('/processos/submit/', form, {
-        // Important: do not set Content-Type header; axios/ browser will set multipart boundary automatically
-        headers: {
-          // Se o apiClient já envia Authorization via interceptor, tudo certo.
-        }
-      });
+      // 3. Envia para o backend
+      const resp = await apiClient.post('/processos/submit/', form); // O Content-Type é definido pelo browser
 
-      // sucesso
       const data = resp.data;
       setSubmitResult({
         docUrl: data.gdrive_doc_url,
@@ -217,6 +226,7 @@ export const NovaDiaria = () => {
         numero: data.numero,
         ano: data.ano,
       });
+
 
       // mostra diálogo de sucesso
       setSuccessDialogOpen(true);
@@ -230,7 +240,7 @@ export const NovaDiaria = () => {
         setSuccessDialogOpen(false);
         // altere '/dashboard' se sua rota for diferente
         navigate('/dashboard');
-      }, 4000);
+      }, 6000);
 
       // opcional: limpar anexos/preview
       setAttachedFiles([]);
@@ -860,16 +870,31 @@ useEffect(() => {
               )}
 
           <Grid size={{ xs: 12, sm: 6, md: 6 }} sx={{ mt: 3 }}>
-              <FormControl fullWidth required>
-                <InputLabel>Meio de Transporte</InputLabel>
-                <Select name="meio_transporte" value={formData.meio_transporte} label="Meio de Transporte" onChange={handleInputChange as any}>
-                  <MenuItem value="VEICULO_PROPRIO">Veículo Próprio</MenuItem>
-                  <MenuItem value="AEREO">Aéreo</MenuItem>
-                  <MenuItem value="ONIBUS">Transporte Rodoviário</MenuItem>
-                  <MenuItem value="CARONA">Carona (em veículo de outro servidor)</MenuItem>
-                </Select>
-              </FormControl>
+            <FormControl fullWidth required>
+              <InputLabel>Meio de Transporte</InputLabel>
+              <Select name="meio_transporte" value={formData.meio_transporte} label="Meio de Transporte" onChange={handleInputChange as any}>
+                <MenuItem value="VEICULO_PROPRIO">Veículo Próprio</MenuItem>
+                <MenuItem value="AEREO">Aéreo</MenuItem>
+                <MenuItem value="ONIBUS">Transporte Rodoviário</MenuItem>
+                <MenuItem value="CARONA">Carona (em veículo de outro servidor)</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+
+          {formData.meio_transporte === 'VEICULO_PROPRIO' && (
+             <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                name="placa_veiculo"
+                label="Placa do Veículo"
+                value={formData.placa_veiculo}
+                onChange={handleInputChange}
+                fullWidth
+                required
+                error={!!fieldErrors.placa_veiculo}
+                helperText={fieldErrors.placa_veiculo || 'Informe a placa do veículo.'}
+              />
             </Grid>
+          )}
 
           <Grid size={{ xs: 12, sm: 6, md: 6 }} sx={{ mt: 3 }}>
             <FormControl fullWidth>
@@ -891,7 +916,6 @@ useEffect(() => {
 
             </Grid>
 
-            {/* Autocomplete de destino - agora retorna address components */}
             <Grid size={{ xs: 12, sm: 8 }}>
               <PlacesAutocomplete onSelect={handlePlaceSelect} />
               <Typography variant="caption" display="block">
