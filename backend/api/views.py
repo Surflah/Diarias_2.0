@@ -6,7 +6,8 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 from django.conf import settings
-from django.db import transaction
+from django.contrib.auth.models import Group
+import logging
 
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -279,14 +280,23 @@ class ProcessoViewSet(viewsets.ModelViewSet):
             ano_folder = google_drive_service.ensure_folder(root_folder_id, str(processo_instance.ano))
             processo_folder_name = f"Diária {processo_instance.numero}-{processo_instance.ano} - {processo_instance.solicitante.get_full_name()}"
             processo_folder = google_drive_service.ensure_folder(ano_folder['id'], processo_folder_name)
-            docs_folder = google_drive_service.ensure_folder(processo_folder['id'], "1 - Documentos recebidos na requisição")
+            docs_folder = google_drive_service.ensure_folder(
+                processo_folder['id'],
+                "1 - Documentos recebidos na solicitação"  # (opcional) padronização do nome
+            )
+
             
             # Salva o ID da pasta principal no processo
             processo_instance.gdrive_folder_id = processo_folder['id']
             processo_instance.save(update_fields=['gdrive_folder_id'])
 
             # 4. Faz o upload dos arquivos anexados
-            attachments = request.FILES.getlist('files')
+            attachments = request.FILES.getlist('files') or request.FILES.getlist('files[]')
+            logger.info("Submit anexos recebidos: %s -> %s", len(attachments), [f.name for f in attachments])
+            if not attachments:
+                logger.info("Nenhum anexo recebido na submissão do processo %s", processo_instance.id)
+
+
             for f in attachments:
                 uploaded_file = google_drive_service.upload_file(docs_folder['id'], f.name, f, f.content_type)
                 Documento.objects.create(
@@ -380,11 +390,56 @@ class ProcessoViewSet(viewsets.ModelViewSet):
 
         # 9. salvar link da pasta no processo (campo gdrive_folder_id já existente)
 
-        # 10. enviar emails
+                # 10. enviar emails
         try:
-            send_process_created_email(processo_instance, controle_emails, requester_email=request.user.email)
+            # Resolve e-mails do Controle Interno por (1) Grupo, (2) flag no Profile, (3) ParametrosSistema
+            controle_emails = []
+
+            # (1) Grupo Django "Controle Interno"
+            try:
+                grp = Group.objects.filter(name__iexact='Controle Interno').first()
+                if grp:
+                    controle_emails = list(
+                        grp.user_set.filter(is_active=True, email__isnull=False)
+                           .values_list('email', flat=True)
+                    )
+            except Exception:
+                pass
+
+            # (2) Campo no Profile (se existir)
+            if not controle_emails:
+                try:
+                    controle_emails = list(
+                        Profile.objects.filter(controle_interno=True, user__is_active=True)
+                               .values_list('user__email', flat=True)
+                    )
+                except Exception:
+                    pass
+
+            # (3) Parametros do sistema (ex.: params.emails_controle_interno)
+            if not controle_emails:
+                try:
+                    params = ParametrosSistema.objects.first()
+                    raw = getattr(params, 'emails_controle_interno', None)
+                    if raw:
+                        if isinstance(raw, str):
+                            controle_emails = [e.strip() for e in raw.split(',') if e.strip()]
+                        elif isinstance(raw, (list, tuple)):
+                            controle_emails = list(raw)
+                except Exception:
+                    pass
+
+            # Envia notificações (passando os links gerados)
+            send_process_created_email(
+                processo_instance,
+                controle_emails,
+                requester_email=request.user.email,
+                doc_url=orq_res.get('doc_url'),
+                folder_url=orq_res.get('folder_url')
+            )
         except Exception:
             logger.exception("Falha ao enviar emails de notificação para processo %s", processo_instance.id)
+
 
         # 11. resposta
         return Response({
@@ -416,12 +471,20 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
     """
     serializer_class = ProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
+    queryset = Profile.objects.all()  # necessário para DRF
 
     def get_object(self):
-        # Esta função é a chave da segurança:
-        # ela retorna sempre o perfil do usuário que está fazendo a requisição.
-        # Impede que um usuário acesse /api/profile/me/ e veja dados de outro.
-        return self.request.user.profile
+        # sempre retorna (ou cria) o profile do usuário autenticado
+        profile, _ = Profile.objects.get_or_create(user=self.request.user)
+        return profile
+
+    def get(self, request, *args, **kwargs):
+        resp = super().get(request, *args, **kwargs)
+        logger.info(
+            "Profile/me fetched for user_id=%s picture_url=%s",
+            request.user.id, getattr(request.user.profile, "picture_url", None)
+        )
+        return resp
     
 class CalculoPreviewAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]

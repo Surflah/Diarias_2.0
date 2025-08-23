@@ -30,7 +30,7 @@ class Profile(models.Model):
     cargo = models.CharField(max_length=100, null=True, blank=True)
     lotacao = models.CharField("Lotação", max_length=100, null=True, blank=True)
     roles = models.ManyToManyField(Role, blank=True, related_name='profiles', verbose_name="Perfis de Acesso")
-    picture_url = models.URLField(max_length=500, blank=True, null=True) 
+    picture_url = models.URLField(max_length=500, blank=True, null=True)
 
     def __str__(self):
         return f'Perfil de {self.user.username}'

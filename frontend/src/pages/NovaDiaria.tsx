@@ -209,12 +209,8 @@ export const NovaDiaria = () => {
        // 2. Cria o FormData
       const form = new FormData();
       // Anexa o JSON stringificado com a chave 'processo'
-      form.append('processo', JSON.stringify(processoPayload));
-
-      // Anexa os arquivos com a chave 'files'
-      attachedFiles.forEach((file) => {
-        form.append('files', file);
-      });
+      form.append('processo', new Blob([JSON.stringify(processoPayload)], { type: 'application/json' }));
+      attachedFiles.forEach((file) => form.append('files', file));
 
       // 3. Envia para o backend
       const resp = await apiClient.post('/processos/submit/', form); // O Content-Type é definido pelo browser
