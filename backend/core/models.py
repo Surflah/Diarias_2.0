@@ -252,3 +252,20 @@ class Documento(models.Model):
     class Meta:
         verbose_name = "Documento"
         verbose_name_plural = "Documentos"
+
+class Anotacao(models.Model):
+    """
+    Anotações livres em qualquer etapa — comunicação integrada do processo.
+    """
+    processo = models.ForeignKey(Processo, on_delete=models.CASCADE, related_name='anotacoes')
+    autor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    texto = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = "Anotação"
+        verbose_name_plural = "Anotações"
+
+    def __str__(self):
+        return f"Anotação de {self.autor_id} em {self.processo_id}"

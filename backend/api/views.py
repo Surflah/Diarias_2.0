@@ -19,12 +19,18 @@ from decimal import Decimal, ROUND_HALF_UP
 
 
 from core.models import Processo, ParametrosSistema, Feriado, Documento, Profile
-from core.services import calculos_service, google_drive_service, google_docs_service
-from .serializers import ProcessoSerializer, ParametrosSistemaSerializer, FeriadoSerializer, ProfileSerializer, CalculoPreviewSerializer
+from core.services import calculos_service, google_drive_service, google_docs_service, workflow_service
+from .serializers import ( ProcessoSerializer, ParametrosSistemaSerializer, 
+    FeriadoSerializer, ProfileSerializer, CalculoPreviewSerializer, 
+    ProcessoHistoricoSerializer, AnotacaoSerializer
+)
 
 from core.services.orquestrador_gdrive import create_process_folder_and_doc
 from core.services.email_service import send_process_created_email
+from core.services.pessoas_service import get_nome_presidente
+from core.services.workflow_service import acoes_permitidas, transicionar
 from num2words import num2words
+
 
 import json
 import math
@@ -362,9 +368,10 @@ class ProcessoViewSet(viewsets.ModelViewSet):
                 'Pagamento_Curso': (
                     'Sim - ' + format_tag_value(processo_instance.valor_taxa_inscricao, is_currency=True)
                 ) if processo_instance.solicita_pagamento_inscricao else 'Não',
-                'justificaViagemAntecipada': processo_instance.justificativa_viagem_antecipada or 'Não se aplica.',
+                'justificaViagemAntecipada': processo_instance.justificativa_viagem_antecipada or '',
                 'observacoes': processo_instance.observacoes or '-----',
                 'extrair_data': format_date(local_created_at.date(), format='d \'de\' MMMM \'de\' yyyy', locale='pt_BR'),
+                'NomePresidente': get_nome_presidente(),
             }
 
             # 6. Cria o documento no Drive e preenche as tags
@@ -428,6 +435,18 @@ class ProcessoViewSet(viewsets.ModelViewSet):
                             controle_emails = list(raw)
                 except Exception:
                     pass
+            
+            # status inicial do workflow: saiu do rascunho -> análise administrativa
+            status_anterior = processo_instance.status
+            processo_instance.status = Processo.Status.ANALISE_ADMIN
+            processo_instance.save(update_fields=['status'])
+            ProcessoHistorico.objects.create(
+                processo=processo_instance,
+                status_anterior=status_anterior,
+                status_novo=processo_instance.status,
+                responsavel=request.user,
+                anotacao="Documento gerado no submit."
+            )
 
             # Envia notificações (passando os links gerados)
             send_process_created_email(
@@ -449,6 +468,46 @@ class ProcessoViewSet(viewsets.ModelViewSet):
             "gdrive_doc_url": orq_res.get('doc_url'),
             "gdrive_folder_url": orq_res.get('folder_url'),
         }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['get'], url_path='historico')
+    def historico(self, request, pk=None):
+        proc = self.get_object()
+        qs = proc.historico.select_related('responsavel').order_by('timestamp')
+        return Response(ProcessoHistoricoSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['get', 'post'], url_path='anotacoes')
+    def anotacoes(self, request, pk=None):
+        proc = self.get_object()
+        if request.method == 'GET':
+            qs = proc.anotacoes.select_related('autor').order_by('created_at')
+            return Response(AnotacaoSerializer(qs, many=True).data)
+        # POST
+        texto = (request.data.get('texto') or '').strip()
+        if not texto:
+            return Response({"texto": ["Este campo é obrigatório."]}, status=400)
+        from core.models import Anotacao
+        a = Anotacao.objects.create(processo=proc, autor=request.user, texto=texto)
+        return Response(AnotacaoSerializer(a).data, status=201)
+
+    @action(detail=True, methods=['post'], url_path='transicionar')
+    def transicionar_action(self, request, pk=None):
+        proc = self.get_object()
+        destino = request.data.get('destino')
+        observacao = request.data.get('observacao') or ''
+        if not destino:
+            return Response({"destino": ["Obrigatório"]}, status=400)
+        try:
+            hist = workflow_service.transicionar(proc, destino, request.user, observacao)
+            return Response({
+                "ok": True,
+                "status": proc.status,
+                "historico": ProcessoHistoricoSerializer([hist], many=True).data
+            })
+        except PermissionError as e:
+            return Response({"detail": str(e)}, status=403)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
 
 
 # ViewSets para os outros modelos (geralmente com permissões mais restritas)
