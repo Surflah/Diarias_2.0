@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from decouple import config
 import os
 import json
+from datetime import timedelta
 
 load_dotenv()
 
@@ -48,8 +49,8 @@ if os.path.exists(CREDENTIALS_PATH):
         GOOGLE_CLIENT_ID = google_cfg.get("client_id")
         GOOGLE_CLIENT_SECRET = google_cfg.get("client_secret")
 
-        if DEBUG:
-            print(f"✅ carregado credentials.json: GOOGLE_CLIENT_ID={'***' if GOOGLE_CLIENT_ID else None}")
+        #if DEBUG:
+         #   print(f"✅ carregado credentials.json: GOOGLE_CLIENT_ID={'***' if GOOGLE_CLIENT_ID else None}")
     except Exception as e:
         # Em DEV, apenas log para debug; não pare a aplicação
         if DEBUG:
@@ -80,6 +81,15 @@ if DEBUG and (not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET):
 
 
 
+REST_USE_JWT = True  # garante que o dj-rest-auth use JWT
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
 
 
 

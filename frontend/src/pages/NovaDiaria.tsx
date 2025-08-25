@@ -131,20 +131,32 @@ export const NovaDiaria = () => {
   const [successDialogOpen, setSuccessDialogOpen] = useState(false);
 
 
+  // PROCURE por: const handleInputChange = (event: React.ChangeEvent<HTMLInputElement> | any) => {
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement> | any) => {
     const { name, value, type, checked } = event.target;
-    // nota: não permitir que o usuário altere campos calculados (valor_upm, num_*)
+
     if (['valor_upm', 'num_com_pernoite', 'num_sem_pernoite', 'num_meia_diaria', 'regiao_diaria'].includes(name)) {
       return;
     }
+
     setFormData(prev => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : (type === 'number' ? (Number(value) || 0) : value),
     }));
+
+    // ⬇️ LIMPE o erro desse campo para reabilitar o botão quando corrigir
+    setFieldErrors(prev => {
+      if (!prev[name]) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
   };
+
 
   const handleSubmit = async () => {
     setSubmitError(null);
+    setFieldErrors({}); // ⬅️ zera erros antigos
 
     const errors: Record<string, string> = {};
     if (formData.solicita_viagem_antecipada) {
@@ -179,6 +191,11 @@ export const NovaDiaria = () => {
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
+    if (Object.keys(errors).length > 0) {
+      console.warn('[NovaDiaria] submit bloqueado por validação', errors, formData);
+      setFieldErrors(errors);
+      return; // não envia; botão continua habilitável após corrigir
+    }
 
     // bloquear UI
     setIsSubmitting(true);
@@ -209,7 +226,7 @@ export const NovaDiaria = () => {
        // 2. Cria o FormData
       const form = new FormData();
       // Anexa o JSON stringificado com a chave 'processo'
-      form.append('processo', new Blob([JSON.stringify(processoPayload)], { type: 'application/json' }));
+      form.append('processo', JSON.stringify(processoPayload));
       attachedFiles.forEach((file) => form.append('files', file));
 
       // 3. Envia para o backend
@@ -862,8 +879,8 @@ useEffect(() => {
                   error={!!fieldErrors.justificativa_viagem_antecipada}
                   helperText={
                     fieldErrors.justificativa_viagem_antecipada ?? (
-                      <Typography sx={{ color: 'error.main', fontWeight: 'bold' }}>
-                        A DATA DE SAÍDA deve corresponder ao início real do deslocamento, ou seja, neste caso um dia antes do compromisso.
+                      <Typography component="span" sx={{ color: 'error.main', fontWeight: 'bold' }}>
+                        A DATA DE SAÍDA É ANTERIOR A 3 DIAS ÚTEIS — justifique a urgência conforme a Res. 27/2025.
                       </Typography>
                     )
                   }
@@ -1166,7 +1183,10 @@ useEffect(() => {
                 color="primary"
                 size="large"
                 onClick={handleSubmit}
-                disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0 || isSubmitting || !!submitResult || successDialogOpen}
+                //disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0 || isSubmitting || !!submitResult || successDialogOpen}
+                // PROCURE por disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0 || isSubmitting || !!submitResult || successDialogOpen}
+                disabled={!isPrazoOk || isSubmitting || !!submitResult || successDialogOpen}
+
                 aria-busy={isSubmitting}
                 aria-live="polite"
                 startIcon={isSubmitting ? <CircularProgress size={18} /> : undefined}
