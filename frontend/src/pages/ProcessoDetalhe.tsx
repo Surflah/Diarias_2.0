@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Box, Card, CardContent, Typography, Stepper, Step, StepLabel, TextField, Button, Stack, Divider } from '@mui/material';
-import { apiClient } from '../api/axiosConfig';
+import apiClient from '../api/axiosConfig';
 
 type Processo = {
   id: number;
@@ -25,14 +25,14 @@ type Anotacao = { id: number; texto: string; autor_nome: string; created_at: str
 
 const STEPS = [
   { code: 'ANALISE_ADMIN', label: 'Análise Administrativa' },
-  { code: 'AG_ASS_SOL', label: 'Assinaturas (Solicitação)' },
-  { code: 'AG_INSCRICAO', label: 'Aguardando Inscrição' },
-  { code: 'AG_EMPENHO', label: 'Aguardando Empenho' },
-  { code: 'AG_PAGAMENTO', label: 'Aguardando Pagamento' },
-  { code: 'AG_PC', label: 'Aguardando Prestação de Contas' },
-  { code: 'PC_ANALISE', label: 'PC – Análise (CI)' },
-  { code: 'AG_ASS_PC', label: 'PC – Assinaturas' },
-  { code: 'PC_ANALISE_CONT', label: 'PC – Contabilidade' },
+  { code: 'AGUARDANDO_ASSINATURAS_SOLICITACAO', label: 'Assinaturas (Solicitação)' },
+  { code: 'AGUARDANDO_INSCRICAO', label: 'Aguardando inscrição' },
+  { code: 'AGUARDANDO_EMPENHO', label: 'Aguardando empenho' },
+  { code: 'AGUARDANDO_PAGAMENTO', label: 'Aguardando pagamento' },
+  { code: 'AGUARDANDO_PC', label: 'Aguardando Prestação de Contas' },
+  { code: 'PC_EM_ANALISE', label: 'PC – Análise (CI)' },
+  { code: 'AGUARDANDO_ASSINATURAS_PC', label: 'PC – Assinaturas' },
+  { code: 'PC_ANALISE_CONTABILIDADE', label: 'PC – Contabilidade' },
   { code: 'ARQUIVADO', label: 'Arquivado' },
 ];
 

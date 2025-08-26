@@ -18,7 +18,9 @@ from rest_framework.decorators import action
 from decimal import Decimal, ROUND_HALF_UP
 
 
-from core.models import Processo, ParametrosSistema, Feriado, Documento, Profile
+from core.models import (
+    Processo, ParametrosSistema, Feriado, Documento, Profile, Role, ProcessoHistorico
+)
 from core.services import calculos_service, google_drive_service, google_docs_service, workflow_service
 from .serializers import ( ProcessoSerializer, ParametrosSistemaSerializer, 
     FeriadoSerializer, ProfileSerializer, CalculoPreviewSerializer, 
@@ -398,57 +400,82 @@ class ProcessoViewSet(viewsets.ModelViewSet):
         # 9. salvar link da pasta no processo (campo gdrive_folder_id já existente)
 
                 # 10. enviar emails
-        try:
-            # Resolve e-mails do Controle Interno por (1) Grupo, (2) flag no Profile, (3) ParametrosSistema
-            controle_emails = []
+        controle_emails: list[str] = []
 
-            # (1) Grupo Django "Controle Interno"
+        try:
+            role = (
+                Role.objects.filter(slug__iexact="controle_interno").first()
+                or Role.objects.filter(name__iexact="controle interno").first()
+                or Role.objects.filter(name__iexact="controle interno.").first()  # tolerância
+                or Role.objects.filter(name__iexact="controle interno ").first()
+                or Role.objects.filter(name__iexact="Controle Interno").first()
+            )
+            if role:
+                controle_emails = list(
+                    Profile.objects
+                        .filter(roles=role, user__is_active=True, user__email__isnull=False)
+                        .values_list("user__email", flat=True)
+                )
+        except Exception:
+            pass
+
+        # (2) Grupo Django
+        if not controle_emails:
             try:
                 grp = Group.objects.filter(name__iexact='Controle Interno').first()
                 if grp:
                     controle_emails = list(
                         grp.user_set.filter(is_active=True, email__isnull=False)
-                           .values_list('email', flat=True)
+                        .values_list('email', flat=True)
                     )
             except Exception:
                 pass
 
-            # (2) Campo no Profile (se existir)
-            if not controle_emails:
-                try:
-                    controle_emails = list(
-                        Profile.objects.filter(controle_interno=True, user__is_active=True)
-                               .values_list('user__email', flat=True)
-                    )
-                except Exception:
-                    pass
+        # (3) Flag em Profile
+        if not controle_emails:
+            try:
+                controle_emails = list(
+                    Profile.objects
+                        .filter(controle_interno=True, user__is_active=True)
+                        .values_list('user__email', flat=True)
+                )
+            except Exception:
+                pass
 
-            # (3) Parametros do sistema (ex.: params.emails_controle_interno)
-            if not controle_emails:
-                try:
-                    params = ParametrosSistema.objects.first()
-                    raw = getattr(params, 'emails_controle_interno', None)
-                    if raw:
-                        if isinstance(raw, str):
-                            controle_emails = [e.strip() for e in raw.split(',') if e.strip()]
-                        elif isinstance(raw, (list, tuple)):
-                            controle_emails = list(raw)
-                except Exception:
-                    pass
+        # (4) Parametrização (campo textos separados por vírgula)
+        if not controle_emails:
+            try:
+                params = ParametrosSistema.objects.first()
+                raw = getattr(params, 'emails_controle_interno', None)
+                if raw:
+                    if isinstance(raw, str):
+                        controle_emails = [e.strip() for e in raw.split(',') if e.strip()]
+                    elif isinstance(raw, (list, tuple)):
+                        controle_emails = list(raw)
+            except Exception:
+                pass
+
+        # saneamento final (dedupe, remove vazios)
+        controle_emails = sorted({(e or "").strip().lower() for e in controle_emails if e})
+        logger.info(
+            "Destinatários Controle Interno resolvidos para processo %s: %s",
+            processo_instance.id, controle_emails
+        )
             
-            # status inicial do workflow: saiu do rascunho -> análise administrativa
-            status_anterior = processo_instance.status
-            processo_instance.status = Processo.Status.ANALISE_ADMIN
-            processo_instance.save(update_fields=['status'])
-            ProcessoHistorico.objects.create(
-                processo=processo_instance,
-                status_anterior=status_anterior,
-                status_novo=processo_instance.status,
-                responsavel=request.user,
-                anotacao="Documento gerado no submit."
-            )
+        status_anterior = processo_instance.status
+        processo_instance.status = Processo.Status.ANALISE_ADMIN
+        processo_instance.save(update_fields=['status'])
 
-            # Envia notificações (passando os links gerados)
+        ProcessoHistorico.objects.create(
+            processo=processo_instance,
+            status_anterior=status_anterior,
+            status_novo=processo_instance.status,
+            responsavel=request.user,
+            anotacao="Documento gerado no submit."
+        )
+
+
+        try:
             send_process_created_email(
                 processo_instance,
                 controle_emails,
@@ -456,6 +483,21 @@ class ProcessoViewSet(viewsets.ModelViewSet):
                 doc_url=orq_res.get('doc_url'),
                 folder_url=orq_res.get('folder_url')
             )
+
+            msg_id = send_process_created_email(
+                processo_instance,
+                controle_emails,
+                requester_email=request.user.email,
+                doc_url=orq_res.get('doc_url'),
+                folder_url=orq_res.get('folder_url'),
+                reply_to_message_id=getattr(processo_instance, "email_message_id", None),  # se não existir, fica None
+            )
+
+            # (opcional) se seu modelo Processo tiver um campo email_message_id, salve para próximas respostas
+            if msg_id and hasattr(processo_instance, "email_message_id") and not processo_instance.email_message_id:
+                processo_instance.email_message_id = msg_id
+                processo_instance.save(update_fields=["email_message_id"])
+
         except Exception:
             logger.exception("Falha ao enviar emails de notificação para processo %s", processo_instance.id)
 

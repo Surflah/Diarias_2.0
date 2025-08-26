@@ -1,8 +1,10 @@
-from django.core.mail import send_mail, EmailMessage
+from django.core.mail import send_mail, EmailMessage, EmailMultiAlternatives
 from django.conf import settings
 from django.template.loader import render_to_string
+from email.utils import make_msgid
 import logging
 
+logger = logging.getLogger(__name__)
 # (novo) para montar links do Drive se vier apenas o ID no Processo
 try:
     from core.services import google_drive_service
@@ -65,91 +67,48 @@ def _make_thread_message_id(processo):
     ano = getattr(processo, "ano", None) or "x"
     return f"<diaria-{pid}-{num}-{ano}@{EMAIL_DOMAIN}>"
 
-def send_process_created_email(processo, controle_emails, requester_email=None, doc_url=None, folder_url=None, in_reply_to=None):
-    """
-    Envia:
-      - para controle_interno: notificação de nova solicitação
-      - para solicitante: confirmação
-    Usa templates se existirem em templates/emails/.
+def send_process_created_email(
+    processo,
+    controle_emails: list[str],
+    requester_email: str | None = None,
+    doc_url: str | None = None,
+    folder_url: str | None = None,
+    reply_to_message_id: str | None = None,   # ⬅️ novo nome, opcional
+):
+    to_list = list(controle_emails or [])
+    if not to_list:
+        logger.warning("Sem destinatários de Controle Interno para processo %s; e-mail não enviado.", processo.id)
+        return None
 
-    Parâmetros adicionais:
-      - doc_url, folder_url: URLs clicáveis (se não vierem, tenta resolver por IDs do processo)
-      - in_reply_to: Message-ID do email anterior (se quiser threadar manualmente)
-                     (opcional; em fases futuras você pode persistir/recuperar isso do banco)
-    """
-    numero = getattr(processo, "numero", None)
-    ano = getattr(processo, "ano", None)
+# corpo para controle interno
+    assunto = f"[Diárias] Nova solicitação {processo.numero}/{processo.ano} - {processo.solicitante.get_full_name()}"
 
-    subject_internal = f"Nova Solicitação de Diária #{numero}-{ano} - Aguardando Análise"
-    subject_requester = f"Sua solicitação de diária #{numero}-{ano} foi criada"
+    corpo = (
+        f"Foi aberta uma solicitação de diária.\n\n"
+        f"Número: {processo.numero}/{processo.ano}\n"
+        f"Solicitante: {processo.solicitante.get_full_name()} ({processo.solicitante.email})\n"
+        f"Destino: {processo.destino}\n\n"
+        f"Documento: {doc_url or '-'}\n"
+        f"Pasta: {folder_url or '-'}\n"
+    )
 
-    # resolve links
-    link_doc, link_folder = _resolve_links(processo, doc_url, folder_url)
+    
+     # headers para threading
+    headers = {}
+    message_id = make_msgid(domain=getattr(settings, "EMAIL_MESSAGE_ID_DOMAIN", None))
+    headers["Message-ID"] = message_id
+    if reply_to_message_id:
+        headers["In-Reply-To"] = reply_to_message_id
+        headers["References"] = reply_to_message_id
 
-    contexto = {
-        "processo": processo,
-        "numero": numero,
-        "ano": ano,
-        "link_doc": link_doc,
-        "link_folder": link_folder,
-    }
-
-    # corpo para controle interno
-    internal_txt = "templates/emails/new_process_internal.txt"
-    if _template_exists(internal_txt):
-        body_internal = render_to_string(internal_txt, contexto)
-    else:
-        body_internal = (
-            f"Nova solicitação de diária #{numero}-{ano}.\n\n"
-            f"Solicitante: {processo.solicitante.get_full_name() if hasattr(processo.solicitante, 'get_full_name') else processo.solicitante}\n"
-            f"Pasta do processo: {link_folder}\n"
-            f"Documento: {link_doc}\n"
-        )
-
-    # corpo para solicitante
-    requester_txt = "templates/emails/new_process_requester.txt"
-    if _template_exists(requester_txt):
-        body_requester = render_to_string(requester_txt, contexto)
-    else:
-        body_requester = (
-            f"Sua solicitação de diária #{numero}-{ano} foi criada com sucesso.\n\n"
-            f"Pasta do processo: {link_folder}\n"
-            f"Documento: {link_doc}\n"
-        )
-
-    # Cabeçalhos para threading básico
-    base_msg_id = _make_thread_message_id(processo)
-    headers_internal = {"Message-ID": base_msg_id}
-    if in_reply_to:
-        headers_internal["In-Reply-To"] = in_reply_to
-        headers_internal["References"] = in_reply_to
-
-    # enviar para controle interno
-    try:
-        if controle_emails:
-            EmailMessage(
-                subject_internal,
-                body_internal,
-                DEFAULT_FROM,
-                to=controle_emails,
-                headers=headers_internal
-            ).send(fail_silently=False)
-    except Exception as e:
-        logger.exception("Falha ao enviar email para controle interno: %s", e)
-
-    # enviar para solicitante — na mesma thread (se desejar)
-    try:
-        if requester_email:
-            headers_requester = {"In-Reply-To": base_msg_id, "References": base_msg_id, "Message-ID": f"{base_msg_id}.req"}
-            EmailMessage(
-                subject_requester,
-                body_requester,
-                DEFAULT_FROM,
-                to=[requester_email],
-                headers=headers_requester
-            ).send(fail_silently=False)
-    except Exception as e:
-        logger.exception("Falha ao enviar email para solicitante: %s", e)
-
-    # opcional: retornar o Message-ID base caso você queira persistir
-    return base_msg_id
+    msg = EmailMultiAlternatives(
+        subject=assunto,
+        body=corpo,
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+        to=to_list,
+        cc=[requester_email] if requester_email else None,
+        headers=headers,
+    )
+    msg.send(fail_silently=False)
+    logger.info("Email enviado para %s (cc: %s) — Message-ID=%s", to_list, requester_email, message_id)
+    return message_id
