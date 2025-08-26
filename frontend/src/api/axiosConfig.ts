@@ -3,15 +3,24 @@
 import axios from 'axios';
 
 const apiClient = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api', 
+  baseURL: 'http://127.0.0.1:8000/api',
 });
+
+const SKIP_ROLE_HEADER_PATHS = ['/profile/me', '/feriados', '/config', '/auth/token/refresh'];
+
 
 apiClient.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('access');
     if (token) {
-      // axios typings aceitam string|number|boolean
       (config.headers as any).Authorization = `Bearer ${token}`;
+    }
+
+    const activeRole = localStorage.getItem('activeRole');
+    const urlPath = (config.url || '');
+    const shouldSkipRoleHeader = SKIP_ROLE_HEADER_PATHS.some(p => urlPath.includes(p));
+    if (activeRole && !shouldSkipRoleHeader) {
+      (config.headers as any)['X-Active-Role'] = activeRole;
     }
 
     // Se for FormData, deixe o browser setar o boundary
@@ -20,7 +29,6 @@ apiClient.interceptors.request.use(
         delete (config.headers as any)['Content-Type'];
       }
     } else {
-      // Requisições normais em JSON
       (config.headers as any)['Content-Type'] = 'application/json';
     }
 
@@ -55,6 +63,7 @@ apiClient.interceptors.response.use(
       // sem refresh → limpe e mande pro login
       localStorage.removeItem('access');
       localStorage.removeItem('refresh');
+      localStorage.removeItem('activeRole'); // Limpa também o perfil ativo
       window.location.href = '/login';
       return Promise.reject(error);
     }
@@ -93,6 +102,7 @@ apiClient.interceptors.response.use(
       // refresh falhou ⇒ sai da sessão
       localStorage.removeItem('access');
       localStorage.removeItem('refresh');
+      localStorage.removeItem('activeRole'); // Limpa também o perfil ativo
       window.location.href = '/login';
       return Promise.reject(e);
     } finally {

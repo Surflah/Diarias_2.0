@@ -11,6 +11,7 @@ import logging
 
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.pagination import PageNumberPagination
 from rest_framework import status, viewsets, permissions, generics
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.decorators import action
@@ -55,151 +56,133 @@ class GoogleAuthView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-
         code = request.data.get("code")
         if not code:
             return Response({"error": "Missing code"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # pega credenciais a partir do settings (definidas pelo settings.py acima)
         client_id = getattr(settings, "GOOGLE_CLIENT_ID", None) or getattr(settings, "GOOGLE_CLOUD_CLIENT_ID", None)
         client_secret = getattr(settings, "GOOGLE_CLIENT_SECRET", None) or getattr(settings, "GOOGLE_CLOUD_CLIENT_SECRET", None)
-
         if not client_id or not client_secret:
             return Response(
-                {
-                    "error": "Google client credentials not configured on server.",
-                    "detail": "Coloque credentials.json na raiz do backend ou defina GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET."
-                },
+                {"error": "Google client credentials not configured on server."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
         token_res = requests.post(
             "https://oauth2.googleapis.com/token",
             data={
-                "code": code,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uri": "postmessage",  
-                "grant_type": "authorization_code"
+                "code": code, "client_id": client_id, "client_secret": client_secret,
+                "redirect_uri": "postmessage", "grant_type": "authorization_code"
             }
         )
-
         token_data = token_res.json()
         if "error" in token_data:
             return Response({"error": token_data}, status=status.HTTP_400_BAD_REQUEST)
-
         id_token = token_data.get("id_token")
         access_token = token_data.get("access_token")
         if not id_token:
             return Response({"error": "No id_token from Google"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Tenta obter dados completos (inclui picture) via userinfo
         user_info = {}
         if access_token:
             ui = requests.get(
                 "https://www.googleapis.com/oauth2/v3/userinfo",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10,
+                headers={"Authorization": f"Bearer {access_token}"}, timeout=10,
             )
-            if ui.ok:
-                user_info = ui.json()
+            if ui.ok: user_info = ui.json()
         if not user_info:
-            # fallback no tokeninfo (pode não ter picture)
             info_res = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}")
             user_info = info_res.json()
-        logger.info("GoogleAuth: email=%s given_name=%s family_name=%s picture_len=%s",
-            user_info.get("email"),
-            user_info.get("given_name"),
-            user_info.get("family_name"),
-            len(user_info.get("picture") or "") )
-        
         email = user_info.get("email")
         if not email:
             return Response({"error": "Invalid token info"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 3. Cria ou pega usuário e atualiza nomes quando vierem do Google
-        given_name = user_info.get("given_name") or ""
-        family_name = user_info.get("family_name") or ""
-        picture = user_info.get("picture") or None
-
-        user, created = User.objects.get_or_create(
+        user, _ = User.objects.get_or_create(
             email=email,
-            defaults={"username": email, "first_name": given_name, "last_name": family_name}
+            defaults={
+                "username": email, "first_name": user_info.get("given_name") or "",
+                "last_name": user_info.get("family_name") or ""
+            }
         )
-        changed = False
-        if given_name and user.first_name != given_name:
-            user.first_name = given_name
-            changed = True
-        if family_name and user.last_name != family_name:
-            user.last_name = family_name
-            changed = True
-        if changed:
-            user.save(update_fields=["first_name", "last_name"])
-
-        # 3.1 garante Profile e salva URL da foto
-        from core.models import Profile
         profile, _ = Profile.objects.get_or_create(user=user)
-        if picture and profile.picture_url != picture:
-            profile.picture_url = picture
+        if user_info.get("picture") and profile.picture_url != user_info.get("picture"):
+            profile.picture_url = user_info.get("picture")
             profile.save(update_fields=["picture_url"])
-
-        
-        logger.info("GoogleAuth: profile saved user_id=%s picture_url=%s",
-            user.id, profile.picture_url)
-        # 4. Gera JWT
         refresh = RefreshToken.for_user(user)
-        return Response({
-            "refresh": str(refresh),
-            "access": str(refresh.access_token),
-        })
+        return Response({"refresh": str(refresh), "access": str(refresh.access_token)})
+
     
 def valor_extenso_sem_centavos_if_round(value):
-    """
-    Retorna o valor por extenso em pt_BR.
-    - Se o valor for 'redondo' (centavos == 0) retorna: "dois mil reais" (ou "um real").
-    - Caso contrário usa a formatação de moeda do num2words: "dois mil reais e cinquenta centavos".
-    """
-    # usa Decimal para evitar problemas de ponto flutuante
     v = Decimal(str(value or 0)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     inteiro = int(v // 1)
     centavos = int((v - inteiro) * 100)
-
     if centavos == 0:
-        # cardinal para números inteiros + palavra correta (singular/plural)
         words = num2words(inteiro, lang='pt_BR', to='cardinal')
         currency_word = 'real' if abs(inteiro) == 1 else 'reais'
         return f"{words} {currency_word}"
-    else:
-        # usar formatação de moeda, que inclui centavos
-        return num2words(float(v), lang='pt_BR', to='currency')
+    return num2words(float(v), lang='pt_BR', to='currency')
     
 def format_tag_value(value, prefix="", suffix="", is_currency=False):
-    """
-    Formata valores para as tags. Se o valor for 0 ou None, retorna '-----'.
-    Adiciona prefixo e sufixo se o valor for válido.
-    """
     if value is None or float(value) == 0:
         return "-----"
-    
     if is_currency:
-        # Formata como R$ 1.234,56
         formatted_value = f"{float(value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         return f"R$ {formatted_value}"
-        
     return f"{prefix}{value}{suffix}"
+
+class DashboardPagination(PageNumberPagination):
+    page_size = 20  # Número de itens por página
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 class ProcessoViewSet(viewsets.ModelViewSet):
     """
     Endpoint da API para visualizar e criar Processos de Diárias.
     """
-    queryset = Processo.objects.all().order_by('-created_at')
     serializer_class = ProcessoSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = DashboardPagination
 
+    # ⭐ MODIFICADO: Lógica de filtragem totalmente refeita para o dashboard
     def get_queryset(self):
-        # Filtra os processos para mostrar apenas os do usuário logado
-        # Observação: aqui assumimos que 'solicitante' é um FK para User
-        return Processo.objects.filter(solicitante=self.request.user)
+        user = self.request.user
+        active_role = self.request.headers.get('X-Active-Role', 'solicitante')
+        view_mode = self.request.query_params.get('view', None)
+
+        qs = Processo.objects.select_related('solicitante', 'solicitante__profile').all()
+
+        S = Processo.Status
+        
+        # Mapeamento de status que exigem ação por perfil de operador
+        ACTION_STATUSES_BY_ROLE = {
+            'controle_interno': [S.ANALISE_ADMIN, S.PC_EM_ANALISE],
+            'assinatura': [S.AGUARDANDO_ASSINATURAS_SOLICITACAO, S.AGUARDANDO_ASSINATURAS_PC],
+            'contabilidade': [S.AGUARDANDO_EMPENHO, S.PC_ANALISE_CONTABILIDADE],
+            'pagamento': [S.AGUARDANDO_PAGAMENTO],
+        }
+
+        # Status considerados "Finalizados"
+        STATUS_FINALIZADOS = [S.ARQUIVADO, S.INDEFERIDO, S.CANCELADO]
+
+        # 1. Filtro por Perfil (Autorização)
+        if active_role == 'solicitante':
+            qs = qs.filter(solicitante=user)
+            # 2. Filtro por Visualização para Solicitante
+            if view_mode == 'finished':
+                qs = qs.filter(status__in=STATUS_FINALIZADOS)
+            else: # Padrão é 'in_progress'
+                qs = qs.exclude(status__in=STATUS_FINALIZADOS)
+
+        elif active_role in ACTION_STATUSES_BY_ROLE:
+            # 2. Filtro por Visualização para Operadores
+            if view_mode == 'action_needed':
+                action_statuses = ACTION_STATUSES_BY_ROLE.get(active_role, [])
+                qs = qs.filter(status__in=action_statuses)
+            # Se view_mode for 'all' ou não especificado, o operador vê todos os processos
+
+        elif active_role == 'admin_geral':
+            # Admin vê tudo, sem filtros adicionais
+            pass
+
+        else: # Fallback de segurança: se o perfil for desconhecido, mostra apenas os do solicitante
+            qs = qs.filter(solicitante=user).exclude(status__in=STATUS_FINALIZADOS)
+
+        return qs.order_by('-created_at')
 
     def perform_create(self, serializer):
         """
@@ -504,11 +487,8 @@ class ProcessoViewSet(viewsets.ModelViewSet):
 
         # 11. resposta
         return Response({
-            "id": processo_instance.id,
-            "numero": processo_instance.numero,
-            "ano": processo_instance.ano,
-            "gdrive_doc_url": orq_res.get('doc_url'),
-            "gdrive_folder_url": orq_res.get('folder_url'),
+            "id": processo_instance.id, "numero": processo_instance.numero, "ano": processo_instance.ano,
+            "gdrive_doc_url": orq_res.get('doc_url'), "gdrive_folder_url": orq_res.get('folder_url'),
         }, status=status.HTTP_201_CREATED)
     
     @action(detail=True, methods=['get'], url_path='historico')
@@ -523,10 +503,8 @@ class ProcessoViewSet(viewsets.ModelViewSet):
         if request.method == 'GET':
             qs = proc.anotacoes.select_related('autor').order_by('created_at')
             return Response(AnotacaoSerializer(qs, many=True).data)
-        # POST
         texto = (request.data.get('texto') or '').strip()
-        if not texto:
-            return Response({"texto": ["Este campo é obrigatório."]}, status=400)
+        if not texto: return Response({"texto": ["Este campo é obrigatório."]}, status=400)
         from core.models import Anotacao
         a = Anotacao.objects.create(processo=proc, autor=request.user, texto=texto)
         return Response(AnotacaoSerializer(a).data, status=201)
@@ -536,19 +514,13 @@ class ProcessoViewSet(viewsets.ModelViewSet):
         proc = self.get_object()
         destino = request.data.get('destino')
         observacao = request.data.get('observacao') or ''
-        if not destino:
-            return Response({"destino": ["Obrigatório"]}, status=400)
+        if not destino: return Response({"destino": ["Obrigatório"]}, status=400)
         try:
             hist = workflow_service.transicionar(proc, destino, request.user, observacao)
-            return Response({
-                "ok": True,
-                "status": proc.status,
-                "historico": ProcessoHistoricoSerializer([hist], many=True).data
-            })
-        except PermissionError as e:
-            return Response({"detail": str(e)}, status=403)
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=400)
+            return Response({ "ok": True, "status": proc.status, "historico": ProcessoHistoricoSerializer([hist], many=True).data })
+        except PermissionError as e: return Response({"detail": str(e)}, status=403)
+        except ValueError as e: return Response({"detail": str(e)}, status=400)
+
 
 
 

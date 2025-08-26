@@ -17,6 +17,7 @@ from decouple import config
 import os
 import json
 from datetime import timedelta
+from corsheaders.defaults import default_headers 
 
 load_dotenv()
 
@@ -182,12 +183,24 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-# Opcional: Se você precisar enviar cookies ou cabeçalhos de autorização
+
+# Se precisar enviar cookies, mantenha:
 CORS_ALLOW_CREDENTIALS = True
+
+# ✅ LIBERA O HEADER CUSTOMIZADO USADO PELO FRONT
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-active-role",   # <— o que estava faltando no preflight
+]
+
+# Em dev ajuda para formulários/cookies (mesmo usando JWT)
+CSRF_TRUSTED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
 
 ROOT_URLCONF = 'diarias_app.urls'
 
