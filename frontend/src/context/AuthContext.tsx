@@ -115,26 +115,27 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   // A função de login agora é mais simples: ela apenas obtém e salva o token.
   // O useEffect acima cuidará da navegação e verificação.
   const loginWithGoogle = async (code: string) => {
-    setIsLoading(true);
     try {
-      const response = await apiClient.post('/google-login/', { code });
-      const accessToken = response.data?.access;
-      const refreshToken = response.data?.refresh;
+      const { data } = await apiClient.post('/google-login/', { code });
 
-      if (accessToken) {
-        localStorage.setItem('access', accessToken);
-        if (refreshToken) {
-          localStorage.setItem('refresh', refreshToken);
-        }
-        setToken(accessToken); // <-- Apenas atualiza o token. O useEffect fará o resto.
-      } else {
-        throw new Error('Token de acesso não encontrado');
-      }
-    } catch (err: any) {
-      console.error('Erro no login com Google:', err);
-      logout();
+      // backend devolve { access, refresh, user }
+      const { access, refresh, user: profile } = data;
+
+      localStorage.setItem('access', access);
+      localStorage.setItem('refresh', refresh);
+
+      setToken(access);
+      setUser(profile);
+
+      // se tiver múltiplos perfis, sua lógica já cuida depois
+      // aqui só direciona para o fluxo normal
+      navigate('/dashboard');
+    } catch (err) {
+      console.error('Falha no login Google', err);
+      alert('Não foi possível autenticar com o Google.');
     }
   };
+
 
   const value = {
     isAuthenticated: !!token,

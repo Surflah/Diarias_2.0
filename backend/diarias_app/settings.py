@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 from decouple import config
 import os
 import json
+from datetime import timedelta
+from corsheaders.defaults import default_headers 
 
 load_dotenv()
 
@@ -48,8 +50,8 @@ if os.path.exists(CREDENTIALS_PATH):
         GOOGLE_CLIENT_ID = google_cfg.get("client_id")
         GOOGLE_CLIENT_SECRET = google_cfg.get("client_secret")
 
-        if DEBUG:
-            print(f"✅ carregado credentials.json: GOOGLE_CLIENT_ID={'***' if GOOGLE_CLIENT_ID else None}")
+        #if DEBUG:
+         #   print(f"✅ carregado credentials.json: GOOGLE_CLIENT_ID={'***' if GOOGLE_CLIENT_ID else None}")
     except Exception as e:
         # Em DEV, apenas log para debug; não pare a aplicação
         if DEBUG:
@@ -80,9 +82,25 @@ if DEBUG and (not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET):
 
 
 
+REST_USE_JWT = True  # garante que o dj-rest-auth use JWT
 
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
 
+# === Email ===
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "arquivo@camaraitapoa.sc.gov.br")
 
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")        # ou o do seu provedor
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")                # ex: notificacoes@camaraitapoa.sc.gov.br
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")        # app password / senha
 
 
 # Application definition
@@ -165,12 +183,24 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-# Opcional: Se você precisar enviar cookies ou cabeçalhos de autorização
+
+# Se precisar enviar cookies, mantenha:
 CORS_ALLOW_CREDENTIALS = True
+
+# ✅ LIBERA O HEADER CUSTOMIZADO USADO PELO FRONT
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-active-role",   # <— o que estava faltando no preflight
+]
+
+# Em dev ajuda para formulários/cookies (mesmo usando JWT)
+CSRF_TRUSTED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
 
 ROOT_URLCONF = 'diarias_app.urls'
 

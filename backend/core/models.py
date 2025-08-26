@@ -30,7 +30,7 @@ class Profile(models.Model):
     cargo = models.CharField(max_length=100, null=True, blank=True)
     lotacao = models.CharField("Lotação", max_length=100, null=True, blank=True)
     roles = models.ManyToManyField(Role, blank=True, related_name='profiles', verbose_name="Perfis de Acesso")
-    picture_url = models.URLField(max_length=500, blank=True, null=True) 
+    picture_url = models.URLField(max_length=500, blank=True, null=True)
 
     def __str__(self):
         return f'Perfil de {self.user.username}'
@@ -252,3 +252,20 @@ class Documento(models.Model):
     class Meta:
         verbose_name = "Documento"
         verbose_name_plural = "Documentos"
+
+class Anotacao(models.Model):
+    """
+    Anotações livres em qualquer etapa — comunicação integrada do processo.
+    """
+    processo = models.ForeignKey(Processo, on_delete=models.CASCADE, related_name='anotacoes')
+    autor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    texto = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = "Anotação"
+        verbose_name_plural = "Anotações"
+
+    def __str__(self):
+        return f"Anotação de {self.autor_id} em {self.processo_id}"

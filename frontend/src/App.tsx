@@ -7,6 +7,9 @@ import { CompleteProfile } from './pages/CompleteProfile';
 import { SelectRole } from './pages/SelectRole'; 
 import { AppLayout } from './components/Layout';
 import { NovaDiaria } from './pages/NovaDiaria';
+import ProcessoDetalhe from './pages/ProcessoDetalhe'; 
+import Dashboard from './pages/Dashboard';
+
 
 // Aceita qualquer nó React e evita depender do namespace JSX
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
@@ -38,17 +41,10 @@ function App(): React.ReactElement {
               <Routes>
                 <Route path="/complete-profile" element={<CompleteProfile />} />
                 <Route path="/select-role" element={<SelectRole />} />
-                <Route
-                  path="/dashboard"
-                  element={
-                    <div>
-                      <h1>Dashboard</h1>
-                      <p>Você está logado com o perfil: <strong>{useAuth().activeRole}</strong></p>
-                    </div>
-                  }
-                />
+                <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/diarias/nova" element={<NovaDiaria />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/processos/:id" element={<ProcessoDetalhe />} />
               </Routes>
             </AppLayout>
           </PrivateRoute>

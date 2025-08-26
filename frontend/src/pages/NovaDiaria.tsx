@@ -122,8 +122,14 @@ export const NovaDiaria = () => {
   // estados de envio
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitResult, setSubmitResult] = useState<{ docUrl?: string; folderUrl?: string; numero?: number; ano?: number } | null>(null);
-
+  type SubmitResult = {
+    id: number; 
+    docUrl?: string;
+    folderUrl?: string;
+    numero?: number;
+    ano?: number;
+  };
+  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null);
   const navigate = useNavigate();
   const autoCloseTimer = useRef<number | null>(null);
 
@@ -131,145 +137,152 @@ export const NovaDiaria = () => {
   const [successDialogOpen, setSuccessDialogOpen] = useState(false);
 
 
+  // PROCURE por: const handleInputChange = (event: React.ChangeEvent<HTMLInputElement> | any) => {
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement> | any) => {
     const { name, value, type, checked } = event.target;
-    // nota: não permitir que o usuário altere campos calculados (valor_upm, num_*)
+
     if (['valor_upm', 'num_com_pernoite', 'num_sem_pernoite', 'num_meia_diaria', 'regiao_diaria'].includes(name)) {
       return;
     }
+
     setFormData(prev => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : (type === 'number' ? (Number(value) || 0) : value),
     }));
+
+    // ⬇️ LIMPE o erro desse campo para reabilitar o botão quando corrigir
+    setFieldErrors(prev => {
+      if (!prev[name]) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
   };
 
-  const handleSubmit = async () => {
-    setSubmitError(null);
 
-    const errors: Record<string, string> = {};
-    if (formData.solicita_viagem_antecipada) {
-      if (!formData.justificativa_viagem_antecipada || formData.justificativa_viagem_antecipada.trim() === '') {
-        errors.justificativa_viagem_antecipada = 'Informe a justificativa da viagem antecipada.';
-      }
+  // helper: rola até um campo pelo name (deixa no topo do arquivo ou junto com outros helpers)
+const scrollToField = (name: string) => {
+  const el = document.getElementsByName(name)?.[0] as HTMLElement | undefined;
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+
+const handleSubmit = async () => {
+  setSubmitError(null);
+  setFieldErrors({}); // zera erros antigos
+
+  // -------- validação --------
+  const errors: Record<string, string> = {};
+
+  // regra da viagem antecipada
+  if (formData.solicita_viagem_antecipada) {
+    if (!formData.justificativa_viagem_antecipada?.trim()) {
+      errors.justificativa_viagem_antecipada = 'Informe a justificativa da viagem antecipada.';
     }
+  }
 
-    // valida datas mínimas e retorno >= saida
-    if (!formData.data_saida) errors['data_saida'] = 'Informe a data de saída.';
-    if (!formData.data_retorno) errors['data_retorno'] = 'Informe a data de retorno.';
-    if (formData.data_saida && formData.data_retorno && formData.data_retorno.isBefore(formData.data_saida)) {
-      errors['data_retorno'] = 'A data de retorno não pode ser anterior à data de saída.';
-    }
+  // datas
+  if (!formData.data_saida) errors.data_saida = 'Informe a data de saída.';
+  if (!formData.data_retorno) errors.data_retorno = 'Informe a data de retorno.';
+  if (formData.data_saida && formData.data_retorno && formData.data_retorno.isBefore(formData.data_saida)) {
+    errors.data_retorno = 'A data de retorno não pode ser anterior à data de saída.';
+  }
 
-    if (formData.meio_transporte === 'VEICULO_PROPRIO' && !formData.placa_veiculo.trim()) {
-      errors.placa_veiculo = 'A placa do veículo é obrigatória.';
-    }
+  // veículo próprio
+  if (formData.meio_transporte === 'VEICULO_PROPRIO' && !formData.placa_veiculo?.trim()) {
+    errors.placa_veiculo = 'A placa do veículo é obrigatória.';
+  }
 
+  // se houver erros: mostra, rola e sai
+  if (Object.keys(errors).length > 0) {
     setFieldErrors(errors);
-    if (Object.keys(errors).length > 0) {
-      const el = document.getElementsByName('justificativa_viagem_antecipada')[0] as HTMLElement | undefined;
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
+    const firstKey = Object.keys(errors)[0];
+    scrollToField(firstKey);
+    // opcional: se usar notistack, descomente:
+    // enqueueSnackbar('Corrija os campos destacados para enviar.', { variant: 'warning' });
+    return;
+  }
+
+  // -------- envio --------
+  setIsSubmitting(true); // trava UI aqui (só depois da validação)
+  try {
+    // monta payload
+    const processoPayload: any = {
+      destino: formData.destino,
+      data_saida: formData.data_saida ? formData.data_saida.toISOString() : null,
+      data_retorno: formData.data_retorno ? formData.data_retorno.toISOString() : null,
+      placa_veiculo: formData.meio_transporte === 'VEICULO_PROPRIO' ? (formData.placa_veiculo || null) : null,
+      solicita_viagem_antecipada: !!formData.solicita_viagem_antecipada,
+      observacoes: formData.observacoes || '',
+      regiao_diaria: formData.regiao_diaria,
+      tipo_diaria: formData.tipo_diaria,
+      meio_transporte: formData.meio_transporte,
+      objetivo_viagem: formData.finalidade_viagem,
+      solicita_pagamento_inscricao: !!formData.solicita_pagamento_inscricao,
+      valor_taxa_inscricao: formData.valor_taxa_inscricao,
+      justificativa_viagem_antecipada: formData.justificativa_viagem_antecipada || '',
+      calculos: calculoData, // mantém o preview como fonte de verdade do doc
+    };
+
+    // FormData com JSON + anexos
+    const form = new FormData();
+    form.append('processo', JSON.stringify(processoPayload));
+    attachedFiles.forEach((file) => form.append('files', file));
+
+    // envia
+    const resp = await apiClient.post('/processos/submit/', form);
+    const data = resp.data as {
+      id: number;
+      numero?: number;
+      ano?: number;
+      gdrive_doc_url?: string;
+      gdrive_folder_url?: string;
+    };
+
+    // guarda resultado (inclui id para navegar)
+    setSubmitResult({
+      id: data.id,
+      docUrl: data.gdrive_doc_url,
+      folderUrl: data.gdrive_folder_url,
+      numero: data.numero,
+      ano: data.ano,
+    });
+
+    setSuccessDialogOpen(true);
+
+    // redirect elegante para o detalhe do processo
+    if (autoCloseTimer.current) window.clearTimeout(autoCloseTimer.current);
+    autoCloseTimer.current = window.setTimeout(() => {
+      setSuccessDialogOpen(false);
+      navigate(`/processos/${data.id}`);
+    }, 1800);
+
+    // limpeza leve
+    setAttachedFiles([]);
+    setImagePreview(null);
+  } catch (err: any) {
+    console.error('Erro ao submeter processo:', err);
+    const message =
+      err?.response?.data?.error ||
+      (err?.response?.data ? JSON.stringify(err.response.data) : err?.message) ||
+      'Erro ao enviar solicitação.';
+    setSubmitError(String(message));
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
+
+  const handleSuccessClose = (goToDetail = false) => {
+    if (autoCloseTimer.current) {
+      window.clearTimeout(autoCloseTimer.current);
+      autoCloseTimer.current = null;
     }
-
-    if (Object.keys(errors).length > 0) {
-      alert('Por favor, corrija os erros no formulário antes de enviar.');
-      // Opcional: focar no primeiro campo com erro
-      const firstErrorKey = Object.keys(errors)[0];
-      const el = document.getElementsByName(firstErrorKey)[0] as HTMLElement | undefined;
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
-
-    // bloquear UI
-    setIsSubmitting(true);
-
-
-    try {
-      // montar payload do processo com os campos relevantes
-      const processoPayload: any = {
-        destino: formData.destino,
-        data_saida: formData.data_saida ? formData.data_saida.toISOString() : null,
-        data_retorno: formData.data_retorno ? formData.data_retorno.toISOString() : null,
-        placa_veiculo: formData.placa_veiculo || null,
-        solicita_viagem_antecipada: formData.solicita_viagem_antecipada || false,
-        observacoes: formData.observacoes || '',
-        regiao_diaria: formData.regiao_diaria,
-        tipo_diaria: formData.tipo_diaria,
-        meio_transporte: formData.meio_transporte,
-        objetivo_viagem: formData.finalidade_viagem,
-        solicita_pagamento_inscricao: formData.solicita_pagamento_inscricao,
-        valor_taxa_inscricao: formData.valor_taxa_inscricao,
-        justificativa_viagem_antecipada: formData.justificativa_viagem_antecipada,
-        
-        // **CRÍTICO**: Enviamos o objeto de cálculos junto.
-        // O backend usará isso para preencher o documento com os valores exatos que o usuário viu.
-        calculos: calculoData,
-      };
-
-       // 2. Cria o FormData
-      const form = new FormData();
-      // Anexa o JSON stringificado com a chave 'processo'
-      form.append('processo', JSON.stringify(processoPayload));
-
-      // Anexa os arquivos com a chave 'files'
-      attachedFiles.forEach((file) => {
-        form.append('files', file);
-      });
-
-      // 3. Envia para o backend
-      const resp = await apiClient.post('/processos/submit/', form); // O Content-Type é definido pelo browser
-
-      const data = resp.data;
-      setSubmitResult({
-        docUrl: data.gdrive_doc_url,
-        folderUrl: data.gdrive_folder_url,
-        numero: data.numero,
-        ano: data.ano,
-      });
-
-
-      // mostra diálogo de sucesso
-      setSuccessDialogOpen(true);
-
-      // inicia auto-redirect após X ms (ex.: 4000 ms = 4s)
-      if (autoCloseTimer.current) {
-        window.clearTimeout(autoCloseTimer.current);
-      }
-      autoCloseTimer.current = window.setTimeout(() => {
-        // navega automaticamente ao dashboard
-        setSuccessDialogOpen(false);
-        // altere '/dashboard' se sua rota for diferente
-        navigate('/dashboard');
-      }, 6000);
-
-      // opcional: limpar anexos/preview
-      setAttachedFiles([]);
-      setImagePreview(null);
-
-    } catch (err: any) {
-      console.error('Erro ao submeter processo:', err);
-      const message =
-        err?.response?.data?.error ||
-        (err?.response?.data ? JSON.stringify(err.response.data) : err?.message) ||
-        'Erro ao enviar solicitação.';
-      setSubmitError(String(message));
-    } finally {
-      setIsSubmitting(false);
+    setSuccessDialogOpen(false);
+    if (goToDetail && submitResult?.id) {
+      navigate(`/processos/${submitResult.id}`);
     }
   };
 
-  const handleSuccessClose = (navigateToDashboard = false) => {
-      // limpa timer se existir
-      if (autoCloseTimer.current) {
-        window.clearTimeout(autoCloseTimer.current);
-        autoCloseTimer.current = null;
-      }
-      setSuccessDialogOpen(false);
-      if (navigateToDashboard) {
-        navigate('/dashboard'); // ajuste se necessário
-      }
-      // nota: mantemos submitResult para evitar reenvio acidental
-    };
 
   const currencyFormatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -866,8 +879,8 @@ useEffect(() => {
                   error={!!fieldErrors.justificativa_viagem_antecipada}
                   helperText={
                     fieldErrors.justificativa_viagem_antecipada ?? (
-                      <Typography sx={{ color: 'error.main', fontWeight: 'bold' }}>
-                        A DATA DE SAÍDA deve corresponder ao início real do deslocamento, ou seja, neste caso um dia antes do compromisso.
+                      <Typography component="span" sx={{ color: 'error.main', fontWeight: 'bold' }}>
+                        A DATA DE SAÍDA É ANTERIOR A 3 DIAS ÚTEIS — justifique a urgência conforme a Res. 27/2025.
                       </Typography>
                     )
                   }
@@ -1170,7 +1183,10 @@ useEffect(() => {
                 color="primary"
                 size="large"
                 onClick={handleSubmit}
-                disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0 || isSubmitting || !!submitResult || successDialogOpen}
+                //disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0 || isSubmitting || !!submitResult || successDialogOpen}
+                // PROCURE por disabled={!isPrazoOk || Object.keys(fieldErrors).length > 0 || isSubmitting || !!submitResult || successDialogOpen}
+                disabled={!isPrazoOk || isSubmitting || !!submitResult || successDialogOpen}
+
                 aria-busy={isSubmitting}
                 aria-live="polite"
                 startIcon={isSubmitting ? <CircularProgress size={18} /> : undefined}

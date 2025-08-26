@@ -1,9 +1,8 @@
 # backend/api/serializers.py
 
 from rest_framework import serializers
-from core.models import Processo, ParametrosSistema, Feriado, Profile, Role
+from core.models import Processo, ParametrosSistema, Feriado, Profile, Role, ProcessoHistorico, Anotacao
 from common.models import User
-from rest_framework import serializers
 
 MEIOS_TRANSPORTE = ('VEICULO_PROPRIO', 'AEREO', 'ONIBUS', 'CARONA')
 
@@ -27,12 +26,12 @@ class ProcessoSerializer(serializers.ModelSerializer):
             'solicita_pagamento_inscricao', 'distancia_total_km',
             'valor_total_diarias', 'valor_deslocamento', 'valor_taxa_inscricao',
             'valor_total_empenhar', 'created_at', 'justificativa_viagem_antecipada',
-            'observacoes',
+            'observacoes', 'ano', 'numero', 
         ]
         read_only_fields = [
             'id', 'solicitante', 'solicitante_nome', 'status', 'status_display',
             'distancia_total_km', 'valor_total_diarias', 'valor_deslocamento',
-            'valor_total_empenhar', 'created_at'
+            'valor_total_empenhar', 'created_at', 'ano', 'numero',  
         ]
 
 class ParametrosSistemaSerializer(serializers.ModelSerializer):
@@ -108,3 +107,24 @@ class CalculoPreviewSerializer(serializers.Serializer):
         if data['data_saida'] >= data['data_retorno']:
             raise serializers.ValidationError("A data de retorno deve ser posterior à data de saída.")
         return data
+
+class ProcessoHistoricoSerializer(serializers.ModelSerializer):
+    responsavel_nome = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProcessoHistorico
+        fields = ['id', 'status_anterior', 'status_novo', 'timestamp', 'responsavel_nome', 'anotacao']
+
+    def get_responsavel_nome(self, obj):
+        return obj.responsavel.get_full_name() or obj.responsavel.email
+
+class AnotacaoSerializer(serializers.ModelSerializer):
+    autor_nome = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Anotacao
+        fields = ['id', 'texto', 'autor_nome', 'created_at']
+
+    def get_autor_nome(self, obj):
+        return obj.autor.get_full_name() or obj.autor.email
+
